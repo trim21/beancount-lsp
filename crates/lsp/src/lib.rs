@@ -63,7 +63,7 @@ struct Cli {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum SchemaTarget {
-    InitializeParams,
+    InitializationOptions,
 }
 
 // Server implementation lives in server.rs; lib.rs keeps CLI parsing and bootstrapping only.
@@ -134,9 +134,12 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
 
     if let Some(target) = cli.schema {
         match target {
-            SchemaTarget::InitializeParams => {
+            SchemaTarget::InitializationOptions => {
                 let schema = schemars::schema_for!(InitializeConfig);
-                println!("{}", serde_json::to_string_pretty(&schema).expect("schema serialization"));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&schema).expect("schema serialization")
+                );
                 return Ok(());
             }
         }
