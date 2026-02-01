@@ -59,9 +59,8 @@ mod tests {
     use tower_lsp::lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams};
 
     fn build_doc(uri: &Url, content: &str) -> Document {
-        let leaked: &'static str = Box::leak(content.to_owned().into_boxed_str());
         let directives =
-            core::normalize_directives(parse_str(leaked, uri.as_str()).unwrap()).unwrap();
+            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
         let rope = ropey::Rope::from_str(content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();

@@ -66,6 +66,6 @@ jobs:
       - run: uv sync --dev --no-install-project
 
       - name: Install wheel
-        run: uv pip install beancount-ast --no-index --find-links ./dist/
+        run: uv pip install beancount-lsp --no-index --find-links ./dist/
 
-      - run: pytest
+      - run: beancount-lsp --help

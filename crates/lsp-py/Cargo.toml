@@ -10,6 +10,6 @@ description = "Python wheel wrapper for beancount-lsp"
 crate-type = ["cdylib"]
 
 [dependencies]
-beancount-lsp = { path = "../lsp" }
-pyo3 = { version = "0.27.2", features = ["abi3-py310", "extension-module", "generate-import-lib"] }
+beancount-lsp = { path = "../lsp", features = ["pyo3"] }
+pyo3 = { version = "0.27.2", features = ["abi3-py310", "generate-import-lib"] }
 tokio = { workspace = true }
