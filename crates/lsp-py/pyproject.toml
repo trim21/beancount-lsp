@@ -5,13 +5,16 @@ build-backend = "maturin"
 [project]
 name = "beancount-lsp"
 description = "Beancount LSP packaged for Python environments"
-readme = "../../README.md"
+readme = "README.md"
 requires-python = ">=3.10"
 version = "0.0.0"
-dependencies = []
+dependencies = [
+  "beancount>=3,<4",
+]
 
 [project.scripts]
 beancount-lsp = "beancount_lsp.cli:main"
+beancount-langauge-server = "beancount_lsp.cli:main"
 
 [tool.uv]
 package = false

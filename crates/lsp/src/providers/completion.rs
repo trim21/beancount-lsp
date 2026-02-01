@@ -3,36 +3,12 @@ use std::collections::{HashMap, HashSet};
 use beancount_parser::core;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
-    Position, Range, TextEdit, Url,
+    Range, TextEdit, Url,
 };
 
+use crate::providers::account::account_at_position;
 use crate::server::Document;
-use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
-
-fn current_prefix(doc: &Document, position: Position) -> Option<(String, Range)> {
-    let byte_idx = lsp_position_to_byte(&doc.rope, position)?;
-
-    let line = doc.rope.byte_to_line(byte_idx);
-    let line_start = doc.rope.line_to_byte(line);
-    let line_slice = doc.rope.byte_slice(line_start..byte_idx).to_string();
-
-    let token_start = line_slice
-        .rfind(char::is_whitespace)
-        .map(|idx| idx + 1)
-        .unwrap_or(0);
-
-    let prefix = line_slice[token_start..].trim();
-    let start_byte = line_start + token_start;
-    let start = byte_to_lsp_position(&doc.rope, start_byte)?;
-
-    Some((
-        prefix.to_owned(),
-        Range {
-            start,
-            end: position,
-        },
-    ))
-}
+use crate::text::lsp_position_to_byte;
 
 fn fuzzy_match(candidate: &str, prefix: &str) -> bool {
     if prefix.is_empty() {
@@ -65,10 +41,29 @@ pub fn completion(
 
     let uri = &params.text_document_position.text_document.uri;
     let position = params.text_document_position.position;
-    let (prefix, replace_range) = documents
-        .get(uri)
-        .and_then(|doc| current_prefix(doc, position))
-        .unwrap_or_else(|| (String::new(), Range::new(position, position)));
+    let doc = documents.get(uri)?;
+
+    let (_account_text, account_range) = account_at_position(doc, position)?;
+
+    let prefix = {
+        let start_byte = lsp_position_to_byte(&doc.rope, account_range.start)?;
+        let end_byte = lsp_position_to_byte(&doc.rope, position)?;
+
+        if start_byte > end_byte {
+            return None;
+        }
+
+        doc.rope
+            .byte_slice(start_byte..end_byte)
+            .to_string()
+            .trim()
+            .to_owned()
+    };
+
+    let replace_range = Range {
+        start: account_range.start,
+        end: position,
+    };
 
     let mut items: Vec<CompletionItem> = accounts
         .into_iter()
@@ -99,14 +94,13 @@ mod tests {
     use beancount_parser::{core, parse_str};
     use beancount_tree_sitter::{language, tree_sitter};
     use tower_lsp::lsp_types::{
-        CompletionContext, CompletionTriggerKind, TextDocumentIdentifier,
+        CompletionContext, CompletionTriggerKind, Position, TextDocumentIdentifier,
         TextDocumentPositionParams,
     };
 
     fn build_doc(uri: &Url, content: &str) -> Document {
-        let leaked: &'static str = Box::leak(content.to_owned().into_boxed_str());
         let directives =
-            core::normalize_directives(parse_str(leaked, uri.as_str()).unwrap()).unwrap();
+            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
         let rope = ropey::Rope::from_str(content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
@@ -161,5 +155,35 @@ mod tests {
         assert_eq!(edit.range.start, Position::new(0, 16));
         assert_eq!(edit.range.end, Position::new(0, 25));
         assert_eq!(edit.new_text, "Assets:Cash");
+    }
+
+    #[test]
+    fn suppresses_completion_outside_account_nodes() {
+        let uri = Url::parse("file:///main.bean").unwrap();
+        let content = "2023-01-01 open Assets:Cash\n2023-01-02 * \"Payee\" \"Narration\"\n";
+        let doc = build_doc(&uri, content);
+
+        let mut documents = HashMap::new();
+        documents.insert(uri.clone(), doc);
+
+        let position = Position::new(1, 14); // inside the payee string, not an account node
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let response = completion(&documents, &params);
+        assert!(
+            response.is_none(),
+            "expected no completion outside account nodes"
+        );
     }
 }

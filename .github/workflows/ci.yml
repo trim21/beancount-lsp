@@ -1,4 +1,4 @@
-name: CI
+name: tests
 
 on:
   push:
@@ -29,6 +29,9 @@ jobs:
 
       - name: Lint (clippy)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test (cargo test)
+        run: cargo test --workspace --all-targets --all-features
 
   pre-commit:
     runs-on: ubuntu-24.04

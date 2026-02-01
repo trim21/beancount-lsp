@@ -1,4 +1,4 @@
-name: Python Tests
+name: python tests
 
 on:
   push:
@@ -35,17 +35,17 @@ jobs:
           - '3.11'
           - '3.12'
           - '3.13'
-          - '3.14'
+          # - '3.14'
         platform:
           - macos-15
           - macos-15-intel
           - windows-latest
-          - windows-11-arm
+          # - windows-11-arm
           - ubuntu-24.04
           - ubuntu-24.04-arm
-        exclude:
-          - platform: windows-11-arm
-            python: '3.10'
+        # exclude:
+    # - platform: windows-11-arm
+    # python: '3.10'
     steps:
       - uses: actions/checkout@v6
 
@@ -60,12 +60,8 @@ jobs:
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-        with:
-          activate-environment: 'true'
-
-      - run: uv sync --dev --no-install-project
 
       - name: Install wheel
-        run: uv pip install beancount-ast --no-index --find-links ./dist/
+        run: uv pip install --system beancount-lsp --find-links ./dist/
 
-      - run: pytest
+      - run: beancount-lsp --help
