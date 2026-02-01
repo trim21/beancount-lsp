@@ -457,15 +457,6 @@ impl Backend {
             tracing::info!(file = %canonical.display(), "loaded beancount file");
         }
 
-        tracing::info!(
-            "load files: {}",
-            documents
-                .keys()
-                .map(|k| k.to_string())
-                .collect::<Vec<String>>()
-                .join(", ")
-        );
-
         Ok(documents)
     }
 
