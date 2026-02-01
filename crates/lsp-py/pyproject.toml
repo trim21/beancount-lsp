@@ -7,10 +7,8 @@ name = "beancount-lsp"
 description = "Beancount LSP packaged for Python environments"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.0.0"
-dependencies = [
-  "beancount>=3,<4",
-]
+dependencies = ["beancount>=3,<4"]
+dynamic = ['version']
 
 [project.scripts]
 beancount-lsp = "beancount_lsp.cli:main"
