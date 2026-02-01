@@ -13,6 +13,8 @@ use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::{LspService, Server};
 use tracing::{Level, info};
 
+use crate::server::InitializeConfig;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum LogLevel {
     Error,
@@ -53,6 +55,15 @@ struct Cli {
     /// Log file path; defaults to stderr when omitted.
     #[arg(long)]
     log_file: Option<PathBuf>,
+
+    /// Output JSON schema for initializationOptions and exit.
+    #[arg(long = "schema", value_enum)]
+    schema: Option<SchemaTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SchemaTarget {
+    InitializeParams,
 }
 
 // Server implementation lives in server.rs; lib.rs keeps CLI parsing and bootstrapping only.
@@ -120,6 +131,16 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
     let Some(cli) = parse_args(&argv)? else {
         return Ok(());
     };
+
+    if let Some(target) = cli.schema {
+        match target {
+            SchemaTarget::InitializeParams => {
+                let schema = schemars::schema_for!(InitializeConfig);
+                println!("{}", serde_json::to_string_pretty(&schema).expect("schema serialization"));
+                return Ok(());
+            }
+        }
+    }
 
     init_logging(&cli)?;
 

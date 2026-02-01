@@ -9,6 +9,7 @@ use beancount_parser::{core, parse_str};
 use beancount_tree_sitter::{language, tree_sitter};
 use glob::glob;
 use ropey::Rope;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task;
@@ -76,7 +77,7 @@ struct InnerBackend {
     documents: HashMap<Url, Document>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 pub struct InitializeConfig {
     pub root_file: PathBuf,
 }

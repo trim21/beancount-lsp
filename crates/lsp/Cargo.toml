@@ -18,6 +18,7 @@ clap = { version = "4.5.56", features = ["derive"] }
 glob = "0.3.3"
 pyo3 = { version = "0.27.2", features = ["auto-initialize", "abi3-py310", "generate-import-lib"], optional = true }
 ropey = { workspace = true }
+schemars = { version = "0.8.21", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { workspace = true }
