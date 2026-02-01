@@ -38,9 +38,8 @@ tasks:
   bump:lsp:
     vars:
       VERSION:
-        sh: yq '.workspace.package.version' ./Cargo.toml
+        sh: yq '.project.version' crates/lsp-py/pyproject.toml
     cmds:
-      - cargo generate-lockfile
-      - git add Cargo.toml Cargo.lock
+      - git add crates/lsp-py/pyproject.toml
       - 'git commit -m "release: {{.VERSION}}"'
       - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}"'

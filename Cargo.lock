@@ -114,7 +114,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "beancount-lsp"
-version = "0.0.2"
+version = "0.0.0"
 dependencies = [
  "anyhow",
  "beancount-parser",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "beancount-lsp-py"
-version = "0.0.2"
+version = "0.0.0"
 dependencies = [
  "beancount-lsp",
  "pyo3",
