@@ -41,25 +41,13 @@ pub fn completion(
 
     let uri = &params.text_document_position.text_document.uri;
     let position = params.text_document_position.position;
-    let doc = match documents.get(uri) {
-        Some(doc) => doc,
-        None => return None,
-    };
+    let doc = documents.get(uri)?;
 
-    let (_account_text, account_range) = match account_at_position(doc, position) {
-        Some(hit) => hit,
-        None => return None,
-    };
+    let (_account_text, account_range) = account_at_position(doc, position)?;
 
     let prefix = {
-        let start_byte = match lsp_position_to_byte(&doc.rope, account_range.start) {
-            Some(b) => b,
-            None => return None,
-        };
-        let end_byte = match lsp_position_to_byte(&doc.rope, position) {
-            Some(b) => b,
-            None => return None,
-        };
+        let start_byte = lsp_position_to_byte(&doc.rope, account_range.start)?;
+        let end_byte = lsp_position_to_byte(&doc.rope, position)?;
 
         if start_byte > end_byte {
             return None;

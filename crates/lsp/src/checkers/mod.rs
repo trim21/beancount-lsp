@@ -19,7 +19,7 @@ pub struct CheckerDiagnostic {
 /// Prefer the native pyo3 checker when available; otherwise use the external script checker.
 #[cfg(feature = "pyo3")]
 pub fn create() -> Option<Box<dyn Checker>> {
-    Some(Box::new(python::PythonChecker::default()))
+    Some(Box::new(python::PythonChecker))
 }
 
 #[cfg(not(feature = "pyo3"))]

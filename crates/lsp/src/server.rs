@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Result as AnyResult, anyhow};
 use beancount_parser::{core, parse_str};
 use beancount_tree_sitter::{language, tree_sitter};
-use clap::builder::Str;
 use glob::glob;
 use ropey::Rope;
 use serde::Deserialize;
@@ -153,15 +152,14 @@ impl Backend {
     pub fn new(client: Client) -> Self {
         let (checker_tx, checker_rx) = mpsc::unbounded_channel();
 
-        let this = Self {
+        Self {
             client,
             inner: Arc::new(RwLock::new(None)),
             checker: checkers::create().map(Arc::<dyn Checker>::from),
             checker_queued: Arc::new(AtomicBool::new(false)),
             checker_tx,
             checker_rx: Arc::new(Mutex::new(Some(checker_rx))),
-        };
-        this
+        }
     }
 
     fn enqueue_checker_run(&self) {
@@ -496,7 +494,7 @@ impl LanguageServer for Backend {
         }
 
         // Start checker worker after initialization so the root file path is known.
-        if let Some(mut rx) = self.checker_rx.lock().await.take() {
+        if let Some(rx) = self.checker_rx.lock().await.take() {
             self.spawn_checker_worker(root_path, rx);
         }
 
