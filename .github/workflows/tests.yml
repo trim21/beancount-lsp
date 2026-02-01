@@ -62,6 +62,6 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install wheel
-        run: uv pip --system install beancount-lsp --find-links ./dist/
+        run: uv pip install --system beancount-lsp --find-links ./dist/
 
       - run: beancount-lsp --help
