@@ -21,6 +21,7 @@
     },
     {
       "matchPackageNames": [
+        "vscode",
         "@types/vscode"
       ],
       "enabled": false
