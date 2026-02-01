@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use beancount_parser::core;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Url};
@@ -8,13 +8,17 @@ use crate::server::Document;
 
 fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<String> {
     let mut notes = Vec::new();
+    let mut seen = HashSet::new();
     for doc in documents.values() {
         for dir in &doc.directives {
             if let core::CoreDirective::Note(n) = dir
                 && n.account == account
                 && !n.note.is_empty()
             {
-                notes.push(n.note.clone());
+                let note = n.note.clone();
+                if seen.insert(note.clone()) {
+                    notes.push(note);
+                }
             }
         }
     }
