@@ -1,0 +1,71 @@
+name: Python Tests
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-wheel:
+    uses: ./.github/workflows/_build_wheels.yaml
+
+  tests:
+    name: Tests (wheel install)
+    needs:
+      - build-wheel
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - '3.10'
+          - '3.11'
+          - '3.12'
+          - '3.13'
+          - '3.14'
+        platform:
+          - macos-15
+          - macos-15-intel
+          - windows-latest
+          - windows-11-arm
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+        exclude:
+          - platform: windows-11-arm
+            python: '3.10'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: wheel
+          path: dist
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '${{ matrix.python }}'
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          activate-environment: 'true'
+
+      - run: uv sync --dev --no-install-project
+
+      - name: Install wheel
+        run: uv pip install beancount-ast --no-index --find-links ./dist/
+
+      - run: pytest

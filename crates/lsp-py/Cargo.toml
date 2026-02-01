@@ -1,0 +1,15 @@
+[package]
+name = "beancount-lsp-py"
+version = "0.0.0"
+authors = ["Trim21 <trim21.me@gmail.com>"]
+edition = "2024"
+license = "MIT"
+description = "Python wheel wrapper for beancount-lsp"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+beancount-lsp = { path = "../lsp" }
+pyo3 = { version = "0.27.2", features = ["abi3-py310", "extension-module", "generate-import-lib"] }
+tokio = { workspace = true }

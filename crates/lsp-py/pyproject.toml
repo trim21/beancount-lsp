@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
+
+[project]
+name = "beancount-lsp"
+description = "Beancount LSP packaged for Python environments"
+readme = "../../README.md"
+requires-python = ">=3.10"
+version = "0.0.0"
+dependencies = []
+
+[project.scripts]
+beancount-lsp = "beancount_lsp.cli:main"
+
+[tool.uv]
+package = false
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "beancount_lsp._lsp"
+bindings = "pyo3"
+python-source = "py-src"
+strip = true

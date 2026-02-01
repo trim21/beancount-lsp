@@ -1,0 +1,22 @@
+version: '3'
+
+tasks:
+  build:lsp:
+    desc: Build Rust LSP crate
+    cmds:
+      - cargo build -p beancount-lsp
+
+  test:lsp:
+    desc: Test Rust LSP crate
+    cmds:
+      - cargo test -p beancount-lsp
+
+  build:lsp-py:
+    desc: Build Python extension via maturin (uses project-local uv env)
+    cmds:
+      - uv run --project crates/lsp-py maturin develop
+
+  test:lsp-py:
+    desc: (Placeholder) Python package has no tests; runs cargo checks for the pyo3 crate
+    cmds:
+      - cargo test -p beancount-lsp-py

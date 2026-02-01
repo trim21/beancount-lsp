@@ -1,0 +1,29 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "github>trim21/renovate-config",
+    "github>trim21/renovate-config:python",
+    "github>trim21/renovate-config:rust"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "cargo": {
+    "enabled": true
+  },
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "matchDepTypes": [
+        "requires-python"
+      ],
+      "enabled": false
+    },
+    {
+      "matchDepNames": [
+        "beancount-parser"
+      ],
+      "enabled": false
+    }
+  ]
+}
