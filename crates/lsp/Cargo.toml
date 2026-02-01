@@ -11,7 +11,7 @@ default = []
 pyo3 = ["dep:pyo3"]
 
 [dependencies]
-anyhow = "1"
+anyhow = "1.0.100"
 beancount-parser = { workspace = true }
 beancount-tree-sitter = { workspace = true }
 clap = { version = "4", features = ["derive"] }
