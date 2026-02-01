@@ -23,9 +23,14 @@ const lspOutputChannel = vscode.window.createOutputChannel(
 );
 
 const error_message = `
-The beancount-language-server extension doesn't ship with prebuilt binaries for your platform yet.
-You can still use it by cloning the polarmutex/beancount-language-server repo from GitHub to build the LSP
-yourself and use it with this extension with the beancountLangServer.serverPath setting
+Beancount Language Server executable (beancount-lsp) not found.
+
+Please ensure it is installed and available in one of the following locations:
+1. Set the path explicitly in "beancount.server_path" setting
+2. Install it in your workspace's .venv directory
+3. Install it globally and ensure it's available in your PATH
+
+To install: pip install beancount-lsp
 `;
 
 const missing_root_file_message = `
