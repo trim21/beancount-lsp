@@ -46,7 +46,7 @@ struct InnerBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct InitializeConfig {
-    pub journal_file: PathBuf,
+    pub root_file: PathBuf,
 }
 
 fn canonical_or_original(path: &Path) -> PathBuf {
@@ -163,7 +163,7 @@ impl Backend {
         })
     }
 
-    fn load_journal_tree(journal_file: &Path) -> AnyResult<HashMap<Url, Document>> {
+    fn load_journal_tree(root_file: &Path) -> AnyResult<HashMap<Url, Document>> {
         fn to_url(path: &Path) -> Option<Url> {
             Url::from_file_path(path).ok()
         }
@@ -234,10 +234,10 @@ impl Backend {
             }
         }
 
-        let root = canonical_or_original(journal_file);
+        let root = canonical_or_original(root_file);
         if !root.is_file() {
             return Err(anyhow!(
-                "journal_file does not exist or is not a file: {}",
+                "root_file does not exist or is not a file: {}",
                 root.display()
             ));
         }
@@ -391,13 +391,13 @@ impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let config = parse_initialize_config(&params)?;
 
-        info!(root_file = %config.journal_file.display(), "received initialization config");
+        info!(root_file = %config.root_file.display(), "received initialization config");
 
         let mut guard = self.inner.write().await;
         if guard.is_some() {
             return Err(Error::invalid_params("initializationOptions already set"));
         }
-        let documents = Self::load_journal_tree(&config.journal_file).unwrap_or_else(|e| {
+        let documents = Self::load_journal_tree(&config.root_file).unwrap_or_else(|e| {
             tracing::warn!("failed to load journal tree: {e}");
             HashMap::new()
         });
