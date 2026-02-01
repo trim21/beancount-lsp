@@ -56,14 +56,22 @@ struct Cli {
     #[arg(long)]
     log_file: Option<PathBuf>,
 
-    /// Output JSON schema for initializationOptions and exit.
-    #[arg(long = "schema", value_enum)]
-    schema: Option<SchemaTarget>,
+    #[command(subcommand)]
+    command: Option<Command>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum SchemaTarget {
     InitializationOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Parser)]
+enum Command {
+    /// Output JSON schema and exit.
+    Schema {
+        #[arg(value_enum)]
+        target: SchemaTarget,
+    },
 }
 
 // Server implementation lives in server.rs; lib.rs keeps CLI parsing and bootstrapping only.
@@ -132,7 +140,7 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
         return Ok(());
     };
 
-    if let Some(target) = cli.schema {
+    if let Some(Command::Schema { target }) = cli.command {
         match target {
             SchemaTarget::InitializationOptions => {
                 let schema = schemars::schema_for!(InitializeConfig);
