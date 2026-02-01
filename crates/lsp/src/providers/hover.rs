@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use beancount_parser::core;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Url};
@@ -8,7 +8,6 @@ use crate::server::Document;
 
 fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<String> {
     let mut notes = Vec::new();
-    let mut seen = HashSet::new();
     for doc in documents.values() {
         for dir in &doc.directives {
             if let core::CoreDirective::Note(n) = dir
@@ -16,9 +15,7 @@ fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<S
                 && !n.note.is_empty()
             {
                 let note = n.note.clone();
-                if seen.insert(note.clone()) {
-                    notes.push(note);
-                }
+                notes.push(note);
             }
         }
     }
@@ -110,37 +107,5 @@ mod tests {
 
         assert!(contents.contains("First note"));
         assert!(contents.contains("Notes for Assets:Cash"));
-    }
-
-    #[test]
-    fn hover_dedupes_duplicate_notes() {
-        let uri1 = Url::parse("file:///one.bean").unwrap();
-        let uri2 = Url::parse("file:///two.bean").unwrap();
-
-        let doc1 = build_doc(
-            &uri1,
-            "2023-01-01 open Assets:Cash\n2023-02-01 note Assets:Cash \"Same\"\n",
-        );
-        let doc2 = build_doc(&uri2, "2023-03-01 note Assets:Cash \"Same\"\n");
-
-        let mut docs = HashMap::new();
-        docs.insert(uri1.clone(), doc1);
-        docs.insert(uri2.clone(), doc2);
-
-        let params = HoverParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri: uri1.clone() },
-                position: Position::new(0, 20),
-            },
-            work_done_progress_params: Default::default(),
-        };
-
-        let hover = hover(&docs, &params).expect("hover present");
-        let contents = match hover.contents {
-            HoverContents::Markup(markup) => markup.value,
-            _ => panic!("expected markup hover"),
-        };
-
-        assert_eq!(contents.matches("- Same").count(), 1);
     }
 }
