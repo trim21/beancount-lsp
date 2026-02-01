@@ -2,6 +2,7 @@ use std::fs::OpenOptions;
 use std::iter;
 use std::path::PathBuf;
 
+mod checkers;
 mod providers;
 mod server;
 mod text;

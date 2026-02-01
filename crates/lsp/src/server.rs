@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Result as AnyResult, anyhow};
 use beancount_parser::{core, parse_str};
@@ -8,7 +10,8 @@ use beancount_tree_sitter::{language, tree_sitter};
 use glob::glob;
 use ropey::Rope;
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::task;
 use tower_lsp::async_trait;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
@@ -24,6 +27,7 @@ use tower_lsp::lsp_types::{
 use tower_lsp::{Client, LanguageServer};
 use tracing::info;
 
+use crate::checkers::{self, Checker, CheckerDiagnostic};
 use crate::providers::definition;
 use crate::providers::{completion, hover, semantic_tokens};
 
@@ -35,9 +39,14 @@ pub struct Document {
     pub tree: tree_sitter::Tree,
 }
 
+#[derive(Clone)]
 pub struct Backend {
     client: Client,
-    inner: RwLock<Option<InnerBackend>>, // initialized state
+    inner: Arc<RwLock<Option<InnerBackend>>>, // initialized state
+    checker: Option<Arc<dyn Checker>>,
+    checker_queued: Arc<AtomicBool>,
+    checker_tx: mpsc::UnboundedSender<()>,
+    checker_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<()>>>>,
 }
 
 struct InnerBackend {
@@ -107,19 +116,22 @@ fn glob_pattern_if_any(path: &str) -> Option<String> {
     Some(pattern.replace('\\', "/"))
 }
 
-fn filename_from_uri(uri: &Url) -> AnyResult<String> {
-    match uri.to_file_path() {
-        Ok(path) => Ok(path.display().to_string()),
-        Err(_) => {
-            // Fallback for URIs that don't match the current platform's file path encoding.
-            // Use the URI path directly to avoid failing the entire request.
-            let path = uri.path().to_string();
-            if path.is_empty() {
-                Err(anyhow!("failed to convert URI to file path: {uri}"))
-            } else {
-                Ok(path)
-            }
-        }
+fn checker_diagnostic_to_lsp(diag: CheckerDiagnostic, source: &str) -> Diagnostic {
+    let line = diag.lineno.unwrap_or(0);
+    let message = match diag.filename.filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name}: {}", diag.message),
+        None => diag.message,
+    };
+
+    Diagnostic {
+        range: Range {
+            start: Position::new(line, 0),
+            end: Position::new(line, u32::MAX),
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some(format!("beancount ({source})")),
+        message,
+        ..Diagnostic::default()
     }
 }
 
@@ -137,10 +149,130 @@ pub fn parse_initialize_config(params: &InitializeParams) -> Result<InitializeCo
 
 impl Backend {
     pub fn new(client: Client) -> Self {
+        let (checker_tx, checker_rx) = mpsc::unbounded_channel();
+
         Self {
             client,
-            inner: RwLock::new(None),
+            inner: Arc::new(RwLock::new(None)),
+            checker: checkers::create().map(Arc::<dyn Checker>::from),
+            checker_queued: Arc::new(AtomicBool::new(false)),
+            checker_tx,
+            checker_rx: Arc::new(Mutex::new(Some(checker_rx))),
         }
+    }
+
+    fn enqueue_checker_run(&self) {
+        if self.checker_queued.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let _ = self.checker_tx.send(());
+    }
+
+    fn spawn_checker_worker(&self, root_file: PathBuf, mut rx: mpsc::UnboundedReceiver<()>) {
+        let this = self.clone();
+
+        let root_uri: Url = Url::from_file_path(&root_file)
+            .map_err(|_| {
+                anyhow!(
+                    "failed to convert root file to URI: {}",
+                    root_file.display()
+                )
+            })
+            .unwrap();
+
+        tokio::spawn(async move {
+            let mut published: HashSet<Url> = HashSet::new();
+            while rx.recv().await.is_some() {
+                published = this
+                    .run_checker_once(&published, &root_uri, &root_file)
+                    .await;
+
+                this.checker_queued.store(false, Ordering::SeqCst);
+            }
+        });
+    }
+
+    async fn run_checker_once(
+        &self,
+        published: &HashSet<Url>,
+        root_uri: &Url,
+        root_file: &Path,
+    ) -> HashSet<Url> {
+        let root_path = canonical_or_original(root_file);
+        let root_file_str = root_path.display().to_string();
+        let mut diags_by_uri: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+
+        if let Some(checker) = self.checker.as_ref().map(Arc::clone) {
+            let result = task::spawn_blocking(move || {
+                let name = checker.name();
+                tracing::info!("run checker: {}", name);
+
+                match checker.run(&root_file_str) {
+                    Ok(diags) => {
+                        let mapped = diags
+                            .into_iter()
+                            .map(|diag| {
+                                let filename = diag.filename.clone();
+                                let lsp = checker_diagnostic_to_lsp(diag, name);
+                                (filename, lsp)
+                            })
+                            .collect::<Vec<_>>();
+                        (mapped, Vec::new())
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to run checker: {}", err);
+                        (Vec::new(), vec![(name, err)])
+                    }
+                }
+            })
+            .await;
+
+            match result {
+                Ok((extra_diags, errors)) => {
+                    for (filename, diag) in extra_diags {
+                        let target_uri = filename
+                            .and_then(|name| {
+                                Url::from_file_path(canonical_or_original(Path::new(&name))).ok()
+                            })
+                            .unwrap_or_else(|| root_uri.clone());
+
+                        diags_by_uri.entry(target_uri).or_default().push(diag);
+                    }
+
+                    for (name, err) in errors {
+                        self.client
+                            .log_message(
+                                MessageType::ERROR,
+                                format!("{name} checker failed: {err}"),
+                            )
+                            .await;
+                    }
+                }
+                Err(err) => {
+                    self.client
+                        .log_message(MessageType::ERROR, format!("checker task panicked: {err}"))
+                        .await;
+                }
+            }
+        }
+
+        let new_keys: HashSet<Url> = diags_by_uri.keys().cloned().collect();
+
+        // Clear diagnostics that disappeared in this run so the client drops them.
+        let stale = published.difference(&new_keys).cloned().collect::<Vec<_>>();
+
+        for uri in stale {
+            self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        }
+
+        for (target_uri, diags) in diags_by_uri {
+            self.client
+                .publish_diagnostics(target_uri.clone(), diags, None)
+                .await;
+        }
+
+        new_keys
     }
 
     fn parse_document(text: &str, filename: &str) -> Option<Document> {
@@ -149,11 +281,14 @@ impl Backend {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).ok()?;
         let tree = parser.parse(&content, None)?;
-        // The parser returns directives borrowing from the input string.
-        // Leak a clone to satisfy the `'static` requirement of stored directives.
-        let leaked: &'static str = Box::leak(content.clone().into_boxed_str());
-        let ast_directives = parse_str(leaked, filename).ok()?;
-        let directives = core::normalize_directives(ast_directives).ok()?;
+
+        // Tree-sitter can still produce a tree for partially invalid input; keep that so
+        // providers and the checker see the latest text even when the beancount parser fails.
+        let directives = parse_str(&content, filename)
+            .ok()
+            .and_then(|ast| core::normalize_directives(ast).ok())
+            .unwrap_or_default();
+
         let rope = Rope::from_str(&content);
         Some(Document {
             directives,
@@ -163,7 +298,7 @@ impl Backend {
         })
     }
 
-    fn load_journal_tree(root_file: &Path) -> AnyResult<HashMap<Url, Document>> {
+    fn load_journal_tree(journal_file: &Path) -> AnyResult<HashMap<Url, Document>> {
         fn to_url(path: &Path) -> Option<Url> {
             Url::from_file_path(path).ok()
         }
@@ -234,10 +369,10 @@ impl Backend {
             }
         }
 
-        let root = canonical_or_original(root_file);
+        let root = canonical_or_original(journal_file);
         if !root.is_file() {
             return Err(anyhow!(
-                "root_file does not exist or is not a file: {}",
+                "journal_file does not exist or is not a file: {}",
                 root.display()
             ));
         }
@@ -322,67 +457,12 @@ impl Backend {
                 })
                 .await
         {
-            self.publish_diagnostics_for(&uri, &text).await;
+            self.enqueue_checker_run();
         }
     }
 
-    async fn reparse(&self, uri: &Url) {
-        let text = match self
-            .with_inner(|inner| inner.documents.get(uri).map(|d| d.content.clone()))
-            .await
-        {
-            Ok(text) => text,
-            Err(_) => return,
-        };
-
-        if let Some(text) = text {
-            self.publish_diagnostics_for(uri, &text).await;
-        }
-    }
-
-    async fn publish_diagnostics_for(&self, uri: &Url, text: &str) {
-        let filename = match filename_from_uri(uri) {
-            Ok(filename) => filename,
-            Err(err) => {
-                let message = err.to_string();
-                let diagnostic = Diagnostic {
-                    range: Range {
-                        start: Position::new(0, 0),
-                        end: Position::new(0, 0),
-                    },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some("beancount-lsp".to_owned()),
-                    message: message.clone(),
-                    ..Diagnostic::default()
-                };
-
-                self.client
-                    .publish_diagnostics(uri.clone(), vec![diagnostic], None)
-                    .await;
-
-                self.client.log_message(MessageType::ERROR, message).await;
-
-                return;
-            }
-        };
-
-        let diagnostics = match parse_str(text, &filename) {
-            Ok(_) => Vec::new(),
-            Err(err) => vec![Diagnostic {
-                range: Range {
-                    start: Position::new(0, 0),
-                    end: Position::new(0, 0),
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("beancount-lsp".to_owned()),
-                message: err.to_string(),
-                ..Diagnostic::default()
-            }],
-        };
-
-        self.client
-            .publish_diagnostics(uri.clone(), diagnostics, None)
-            .await;
+    async fn reparse(&self, _uri: &Url) {
+        self.enqueue_checker_run();
     }
 }
 
@@ -393,16 +473,25 @@ impl LanguageServer for Backend {
 
         info!(root_file = %config.root_file.display(), "received initialization config");
 
-        let mut guard = self.inner.write().await;
-        if guard.is_some() {
-            return Err(Error::invalid_params("initializationOptions already set"));
-        }
-        let documents = Self::load_journal_tree(&config.root_file).unwrap_or_else(|e| {
-            tracing::warn!("failed to load journal tree: {e}");
-            HashMap::new()
-        });
+        let root_path = canonical_or_original(&config.root_file);
+        {
+            let mut guard = self.inner.write().await;
+            if guard.is_some() {
+                return Err(Error::invalid_params("initializationOptions already set"));
+            }
 
-        *guard = Some(InnerBackend { documents });
+            let documents = Self::load_journal_tree(&root_path).unwrap_or_else(|e| {
+                tracing::warn!("failed to load journal tree: {e}");
+                HashMap::new()
+            });
+
+            *guard = Some(InnerBackend { documents });
+        }
+
+        // Start checker worker after initialization so the root file path is known.
+        if let Some(rx) = self.checker_rx.lock().await.take() {
+            self.spawn_checker_worker(root_path, rx);
+        }
 
         let text_document_sync = TextDocumentSyncCapability::Options(TextDocumentSyncOptions {
             open_close: Some(true),
@@ -448,6 +537,9 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "beancount-lsp initialized")
             .await;
+
+        // Run checker once after initialization without blocking this handler.
+        self.enqueue_checker_run();
     }
 
     async fn shutdown(&self) -> Result<()> {

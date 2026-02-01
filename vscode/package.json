@@ -12,7 +12,7 @@
     "vscode": "^1.100.0"
   },
   "scripts": {
-    "package": "pnpm exec vsce package --no-dependencies -o dist/beancount-language-server.vsix",
+    "package": "pnpm exec vsce package --no-dependencies -o dist/beancount-lsp.vsix",
     "build-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node20 --sourcemap",
     "build": "pnpm run build-base && pnpm run package",
     "lint": "eslint -c eslint.config.mjs --ext .ts ./src"

@@ -121,6 +121,7 @@ dependencies = [
  "beancount-tree-sitter",
  "clap",
  "glob",
+ "pyo3",
  "ropey",
  "serde",
  "serde_json",

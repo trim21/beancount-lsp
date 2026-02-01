@@ -1,12 +1,10 @@
 name: vscode ci
 
 on:
+  workflow_dispatch:
   push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
+    tags:
+      - 'vscode/v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
   test:
@@ -19,14 +17,15 @@ jobs:
 
       - name: Setup Node
         uses: actions/setup-node@v6
-        with:
-          package-manager-cache: false
 
       - run: pnpm install --frozen-lockfile
         working-directory: vscode
 
-      - run: pnpm run -C vscode lint
-        working-directory: vscode
-
       - run: pnpm run -C vscode build
         working-directory: vscode
+
+      - name: Publish
+        working-directory: vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: pnpm exec vsce publish --no-dependencies --packagePath "dist/beancount-lsp.vsix" --pat "$VSCE_PAT"
