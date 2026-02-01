@@ -53,6 +53,22 @@ struct Cli {
     /// Log file path; defaults to stderr when omitted.
     #[arg(long)]
     log_file: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Parser)]
+enum Command {
+    /// Start the language server.
+    Serve(Serve),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Parser)]
+struct Serve {
+    /// Path to the root Beancount file.
+    #[arg(value_name = "ROOT_FILE")]
+    root_file: PathBuf,
 }
 
 // Server implementation lives in server.rs; lib.rs keeps CLI parsing and bootstrapping only.
@@ -133,7 +149,11 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::build(Backend::new).finish();
+    let root_file = match &cli.command {
+        Command::Serve(Serve { root_file }) => root_file.clone(),
+    };
+
+    let (service, socket) = LspService::build(move |client| Backend::new(root_file.clone(), client)).finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 
     Ok(())

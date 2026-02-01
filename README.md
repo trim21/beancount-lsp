@@ -22,11 +22,9 @@ The package installs two console scripts: `beancount-lsp` (preferred) and `beanc
 1) Pick your main journal file (the one that includes the rest). Call it `/path/to/main.bean`.
 2) Configure your LSP client to start the server via stdio:
 	 - Command: `beancount-lsp`
-	 - Initialization options (required):
-		 ```json
-		 {
-			 "root_file": "/path/to/main.bean"
-		 }
+	 - Arguments (required):
+		 ```
+		 serve /path/to/main.bean
 		 ```
 3) Open any included Beancount file; the server will parse the full include graph starting from `root_file`.
 

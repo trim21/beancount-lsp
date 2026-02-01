@@ -9,7 +9,6 @@ use beancount_parser::{core, parse_str};
 use beancount_tree_sitter::{language, tree_sitter};
 use glob::glob;
 use ropey::Rope;
-use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task;
 use tower_lsp::async_trait;
@@ -65,6 +64,7 @@ pub struct Document {
 #[derive(Clone)]
 pub struct Backend {
     client: Client,
+    root_file: PathBuf,
     inner: Arc<RwLock<Option<InnerBackend>>>, // initialized state
     checker: Option<Arc<dyn Checker>>,
     checker_queued: Arc<AtomicBool>,
@@ -74,11 +74,6 @@ pub struct Backend {
 
 struct InnerBackend {
     documents: HashMap<Url, Document>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct InitializeConfig {
-    pub root_file: PathBuf,
 }
 
 fn canonical_or_original(path: &Path) -> PathBuf {
@@ -158,24 +153,13 @@ fn checker_diagnostic_to_lsp(diag: CheckerDiagnostic, source: &str) -> Diagnosti
     }
 }
 
-pub fn parse_initialize_config(params: &InitializeParams) -> Result<InitializeConfig> {
-    let value = params
-        .initialization_options
-        .as_ref()
-        .ok_or_else(|| Error::invalid_params("missing initializationOptions"))?;
-
-    tracing::debug!("init opts: {}", value.clone());
-
-    serde_json::from_value(value.clone())
-        .map_err(|err| Error::invalid_params(format!("invalid initializationOptions: {err}")))
-}
-
 impl Backend {
-    pub fn new(client: Client) -> Self {
+    pub fn new(root_file: PathBuf, client: Client) -> Self {
         let (checker_tx, checker_rx) = mpsc::unbounded_channel();
 
         Self {
             client,
+            root_file,
             inner: Arc::new(RwLock::new(None)),
             checker: checkers::create().map(Arc::<dyn Checker>::from),
             checker_queued: Arc::new(AtomicBool::new(false)),
@@ -508,11 +492,14 @@ impl Backend {
 #[async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let config = parse_initialize_config(&params)?;
+        if params.initialization_options.is_some() {
+            return Err(Error::invalid_params(
+                "initializationOptions.root_file is no longer supported; pass root file to `beancount-lsp serve <root_file>`",
+            ));
+        }
 
-        info!(root_file = %config.root_file.display(), "received initialization config");
-
-        let root_path = canonical_or_original(&config.root_file);
+        let root_path = canonical_or_original(&self.root_file);
+        info!(root_file = %root_path.display(), "using root file from CLI");
         {
             let mut guard = self.inner.write().await;
             if guard.is_some() {

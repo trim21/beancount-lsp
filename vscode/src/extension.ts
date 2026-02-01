@@ -55,7 +55,7 @@ async function start_or_restart_client(
 
   const config = vscode.workspace.getConfiguration("beancount");
 
-  const serverArgs: string[] = [];
+  const serverArgs: string[] = ["serve"];
   const logLevel = config.get<string | null>("log_level")?.trim();
   if (logLevel) {
     serverArgs.push("--log-level", logLevel);
@@ -76,15 +76,12 @@ async function start_or_restart_client(
     debug: server_executable,
   };
 
-  type InitializationOptions = { root_file: string };
-
   const root_file = config.get<string>("root_file");
   if (!root_file || root_file.trim() === "") {
     await vscode.window.showErrorMessage(missing_root_file_message);
     return;
   }
-
-  const initializationOptions: InitializationOptions = { root_file };
+  serverArgs.push(root_file);
 
   const client_options: LanguageClientOptions = {
     outputChannel: lspOutputChannel,
@@ -93,7 +90,6 @@ async function start_or_restart_client(
       // Notify the server about file changes to beancount files contained in the workspace
       fileEvents: vscode.workspace.createFileSystemWatcher("**/.{bean,beancount}"),
     },
-    initializationOptions,
     errorHandler: {
       error(
         error: Error,
