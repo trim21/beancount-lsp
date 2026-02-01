@@ -5,6 +5,7 @@
     "quotes": "preferSingle"
   },
   "excludes": [
+    "vscode/pnpm-lock.yaml",
     "**/__snapshots__/**"
   ],
   "plugins": [
