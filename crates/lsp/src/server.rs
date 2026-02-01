@@ -485,9 +485,7 @@ impl LanguageServer for Backend {
                 HashMap::new()
             });
 
-            *guard = Some(InnerBackend {
-                documents,
-            });
+            *guard = Some(InnerBackend { documents });
         }
 
         // Start checker worker after initialization so the root file path is known.
