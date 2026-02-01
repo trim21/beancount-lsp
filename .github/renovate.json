@@ -21,6 +21,7 @@
     },
     {
       "matchDepNames": [
+        "beancount-tree-sitter",
         "beancount-parser"
       ],
       "enabled": false
