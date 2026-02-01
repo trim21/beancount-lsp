@@ -8,6 +8,6 @@ members = [
 [workspace.dependencies]
 beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "8b4e3311258194fe3127862dd4132028e97cc01d" }
 beancount-tree-sitter = { git = "https://github.com/trim21/beancount.git", rev = "8b4e3311258194fe3127862dd4132028e97cc01d" }
-ropey = "1.6"
+ropey = "1.6.1"
 tokio = { version = "1.39.3", features = ["io-std", "macros", "rt-multi-thread", "sync"] }
 tower-lsp = "0.20"
