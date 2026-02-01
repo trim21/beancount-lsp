@@ -9,7 +9,7 @@
   "homepage": "https://github.com/trim21/beancount-lsp",
   "publisher": "trim21",
   "engines": {
-    "vscode": "^1.100.0"
+    "vscode": "^1.999.0"
   },
   "scripts": {
     "package": "pnpm exec vsce package --no-dependencies -o dist/beancount-lsp.vsix",
