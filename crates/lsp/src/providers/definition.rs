@@ -5,7 +5,7 @@ use ropey::Rope;
 use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Range, Url};
 
 use crate::providers::account::account_at_position;
-use crate::server::Document;
+use crate::server::{find_document, Document};
 use crate::text::ts_point_to_lsp_position;
 
 fn collect_open_definitions(
@@ -61,8 +61,7 @@ pub fn goto_definition(
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
 
-    let (account, _) = documents
-        .get(uri)
+    let (account, _) = find_document(documents, uri)
         .and_then(|doc| account_at_position(doc, position))?;
 
     let mut locations = Vec::new();

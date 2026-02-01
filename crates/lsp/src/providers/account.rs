@@ -2,9 +2,7 @@ use beancount_tree_sitter::NodeKind;
 use tower_lsp::lsp_types::{Position, Range};
 
 use crate::server::Document;
-use crate::text::{
-    byte_to_lsp_position, lsp_position_to_byte, lsp_position_to_ts_point, ts_point_to_lsp_position,
-};
+use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
 fn text_account_at_position(doc: &Document, position: Position) -> Option<(String, Range)> {
     let byte_idx = lsp_position_to_byte(&doc.rope, position)?;
@@ -49,7 +47,7 @@ fn text_account_at_position(doc: &Document, position: Position) -> Option<(Strin
     }
 
     let token = line_slice.get(start..end)?.trim();
-    if token.is_empty() {
+    if token.is_empty() || !token.contains(':') {
         return None;
     }
 
@@ -69,37 +67,111 @@ fn text_account_at_position(doc: &Document, position: Position) -> Option<(Strin
 
 /// Find the account node (if any) at the given position and return its text and range.
 pub fn account_at_position(doc: &Document, position: Position) -> Option<(String, Range)> {
-    let point = lsp_position_to_ts_point(&doc.rope, position)?;
-    let node = doc
-        .tree
-        .root_node()
-        .descendant_for_point_range(point, point)?;
+    let byte_idx = lsp_position_to_byte(&doc.rope, position)?;
 
-    let mut current = node;
-    let account_node = loop {
-        match NodeKind::from(current.kind()) {
-            NodeKind::Account => break current,
-            _ => {
-                if let Some(parent) = current.parent() {
-                    current = parent;
-                } else {
-                    return None;
-                }
-            }
+    let mut stack = vec![doc.tree.root_node()];
+    while let Some(node) = stack.pop() {
+        let start_byte = node.start_byte();
+        let end_byte = node.end_byte();
+
+        // Only descend into nodes that could contain the cursor.
+        if !(start_byte <= byte_idx && byte_idx <= end_byte) {
+            continue;
         }
-    };
 
-    let start = ts_point_to_lsp_position(&doc.rope, account_node.start_position())?;
-    let end = ts_point_to_lsp_position(&doc.rope, account_node.end_position())?;
+        if NodeKind::from(node.kind()) == NodeKind::Account {
+            let text = doc
+                .rope
+                .byte_slice(start_byte..end_byte)
+                .to_string()
+                .trim()
+                .to_owned();
 
-    let account_text = doc
-        .rope
-        .byte_slice(account_node.start_byte()..account_node.end_byte())
-        .to_string();
-    let account = account_text.trim().to_owned();
-    if account.is_empty() {
-        return text_account_at_position(doc, position);
+            if text.is_empty() {
+                return None;
+            }
+
+            let start = byte_to_lsp_position(&doc.rope, start_byte)?;
+            let end = byte_to_lsp_position(&doc.rope, end_byte)?;
+
+            return Some((
+                text,
+                Range {
+                    start,
+                    end,
+                },
+            ));
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            stack.push(child);
+        }
     }
 
-    Some((account, Range { start, end })).or_else(|| text_account_at_position(doc, position))
+    // Fallback to a plain-text heuristic when the parse tree does not yield an account node.
+    text_account_at_position(doc, position)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use beancount_parser::{core, parse_str};
+    use beancount_tree_sitter::{language, tree_sitter};
+    use ropey::Rope;
+    use tower_lsp::lsp_types::{Position, Url};
+
+    fn build_doc(uri: &Url, content: &str) -> Document {
+        let directives =
+            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
+        let rope = Rope::from_str(content);
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&language()).unwrap();
+        let tree = parser.parse(content, None).unwrap();
+        Document {
+            directives,
+            content: content.to_owned(),
+            rope,
+            tree,
+        }
+    }
+
+    #[test]
+    fn finds_account_and_range() {
+        let uri = Url::parse("file:///account.bean").unwrap();
+        let content = "2023-01-01 open Assets:Cash\n";
+        let doc = build_doc(&uri, content);
+
+        let cursor = Position::new(0, 20);
+        let (account, range) = account_at_position(&doc, cursor).expect("expected account hit");
+
+        assert_eq!(account, "Assets:Cash");
+        assert_eq!(range.start, Position::new(0, 16));
+        assert_eq!(range.end, Position::new(0, 27));
+    }
+
+    #[test]
+    fn finds_account_when_cursor_at_token_end() {
+        let uri = Url::parse("file:///account.bean").unwrap();
+        let content = "2023-01-01 open Assets:Cash\n";
+        let doc = build_doc(&uri, content);
+
+        // Cursor immediately after the account token (no trailing whitespace)
+        let cursor = Position::new(0, 27);
+        let (account, range) = account_at_position(&doc, cursor).expect("expected account hit");
+
+        assert_eq!(account, "Assets:Cash");
+        assert_eq!(range.start, Position::new(0, 16));
+        assert_eq!(range.end, Position::new(0, 27));
+    }
+
+    #[test]
+    fn returns_none_outside_account_nodes() {
+        let uri = Url::parse("file:///account.bean").unwrap();
+        let content = "2023-01-01 open Assets:Cash\n2023-01-02 * \"Payee\" \"Narration\"\n";
+        let doc = build_doc(&uri, content);
+
+        let cursor = Position::new(1, 14); // inside payee string
+        assert!(account_at_position(&doc, cursor).is_none());
+    }
 }

@@ -31,6 +31,29 @@ use crate::checkers::{self, Checker, CheckerDiagnostic};
 use crate::providers::definition;
 use crate::providers::{completion, hover, semantic_tokens};
 
+fn url_normalized_key(url: &Url) -> Option<String> {
+    let path = url.to_file_path().ok()?;
+    Some(normalized_path_key(&path))
+}
+
+/// Find a document by URI, tolerating platform-specific path casing/format differences.
+pub(crate) fn find_document<'a>(
+    documents: &'a HashMap<Url, Document>,
+    uri: &Url,
+) -> Option<&'a Document> {
+    if let Some(doc) = documents.get(uri) {
+        return Some(doc);
+    }
+
+    let target = url_normalized_key(uri)?;
+
+    documents.iter().find_map(|(key, doc)| {
+        url_normalized_key(key)
+            .filter(|candidate| candidate == &target)
+            .map(|_| doc)
+    })
+}
+
 #[derive(Clone)]
 pub struct Document {
     pub directives: Vec<core::CoreDirective>,
@@ -434,6 +457,15 @@ impl Backend {
             tracing::info!(file = %canonical.display(), "loaded beancount file");
         }
 
+        tracing::info!(
+            "load files: {}",
+            documents
+                .keys()
+                .map(|k| k.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+
         Ok(documents)
     }
 
@@ -450,9 +482,25 @@ impl Backend {
     }
 
     async fn update_document(&self, uri: Url, text: String) {
+        let target_key = url_normalized_key(&uri);
+
         if let Some(doc) = Self::parse_document(&text, uri.as_str())
             && let Ok(()) = self
                 .with_inner_mut(|inner| {
+                    if let Some(target_key) = &target_key {
+                        // Avoid duplicate entries with the same normalized path (Windows casing).
+                        let dupes: Vec<Url> = inner
+                            .documents
+                            .keys()
+                            .filter(|existing| {
+                                url_normalized_key(existing).as_ref() == Some(target_key)
+                            })
+                            .cloned()
+                            .collect();
+                        for k in dupes {
+                            inner.documents.remove(&k);
+                        }
+                    }
                     inner.documents.insert(uri.clone(), doc);
                 })
                 .await
@@ -567,6 +615,8 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        tracing::info!("completion triggered");
+
         self.with_inner(|inner| completion::completion(&inner.documents, &params))
             .await
     }
@@ -590,7 +640,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri;
         let text = self
-            .with_inner(|inner| inner.documents.get(&uri).cloned())
+            .with_inner(|inner| find_document(&inner.documents, &uri).cloned())
             .await?;
         Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(&doc.content)))
     }
