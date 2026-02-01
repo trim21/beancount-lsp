@@ -34,3 +34,13 @@ tasks:
       - git add vscode/package.json
       - 'git commit -m "release(vscode): {{.VERSION}}"'
       - 'git tag "vscode/v{{.VERSION}}" -m "vscode/v{{.VERSION}}"'
+
+  bump:lsp:
+    vars:
+      VERSION:
+        sh: yq '.workspace.package.version' ./Cargo.toml
+    cmds:
+      - cargo generate-lockfile
+      - git add Cargo.toml
+      - 'git commit -m "release: {{.VERSION}}"'
+      - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}"'
