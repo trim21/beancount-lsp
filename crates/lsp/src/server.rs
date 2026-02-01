@@ -197,7 +197,7 @@ impl Backend {
         &self,
         published: &HashSet<Url>,
         root_uri: &Url,
-        root_file: &PathBuf,
+        root_file: &Path,
     ) -> HashSet<Url> {
         let root_path = canonical_or_original(root_file);
         let root_file_str = root_path.display().to_string();
