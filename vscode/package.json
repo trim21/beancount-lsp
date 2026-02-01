@@ -4,7 +4,7 @@
   "description": "beancount language server",
   "author": "trim21",
   "license": "MIT",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "repository": "https://github.com/trim21/beancount-lsp",
   "homepage": "https://github.com/trim21/beancount-lsp",
   "publisher": "trim21",
