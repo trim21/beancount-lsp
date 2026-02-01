@@ -41,6 +41,6 @@ tasks:
         sh: yq '.workspace.package.version' ./Cargo.toml
     cmds:
       - cargo generate-lockfile
-      - git add Cargo.toml
+      - git add Cargo.toml Cargo.lock
       - 'git commit -m "release: {{.VERSION}}"'
       - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}"'
