@@ -30,6 +30,7 @@
     },
     {
       "matchPackageNames": [
+        "@types/node",
         "microsoft/vscode",
         "@types/vscode"
       ],
