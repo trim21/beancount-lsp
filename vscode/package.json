@@ -4,7 +4,7 @@
   "description": "beancount language server",
   "author": "trim21",
   "license": "MIT",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "repository": "https://github.com/trim21/beancount-lsp",
   "homepage": "https://github.com/trim21/beancount-lsp",
   "publisher": "trim21",
@@ -37,9 +37,6 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0"
   },
-  "activationEvents": [
-    "onLanguage:beancount"
-  ],
   "main": "./out/extension",
   "contributes": {
     "commands": [
