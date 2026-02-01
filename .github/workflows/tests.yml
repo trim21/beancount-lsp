@@ -60,12 +60,8 @@ jobs:
 
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-        with:
-          activate-environment: 'true'
-
-      - run: uv sync --dev --no-install-project
 
       - name: Install wheel
-        run: uv pip install beancount-lsp --no-index --find-links ./dist/
+        run: uv pip --system install beancount-lsp --find-links ./dist/
 
       - run: beancount-lsp --help
