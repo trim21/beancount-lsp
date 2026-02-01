@@ -29,7 +29,7 @@ tasks:
   bump:vscode:
     vars:
       VERSION:
-        sh: jq '.version' vscode/package.json
+        sh: jq -r '.version' vscode/package.json
     cmds:
       - git add vscode/package.json
       - 'git commit -m "release(vscode): {{.VERSION}}"'
