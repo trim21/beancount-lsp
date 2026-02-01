@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/lsp", "crates/lsp-py"]
-package.version = "0.0.1"
+package.version = "0.0.2"
 
 [workspace.dependencies]
 beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "8b4e3311258194fe3127862dd4132028e97cc01d" }
