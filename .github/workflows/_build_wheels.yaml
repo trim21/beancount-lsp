@@ -22,7 +22,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: wheels-sdist
-          path: dist
+          path: ./crates/lsp-py/dist/*.tar.gz
+          if-no-files-found: 'error'
 
   wheel:
     runs-on: ${{ matrix.platform.runner }}
@@ -72,7 +73,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: wheels-${{ runner.os }}-${{ matrix.platform.target }}
-          path: dist
+          path: ./crates/lsp-py/dist/*.whl
+          if-no-files-found: 'error'
 
   merge-wheel-artifact:
     runs-on: ubuntu-24.04
