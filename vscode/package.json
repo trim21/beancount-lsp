@@ -25,8 +25,8 @@
     "@eslint/js": "^9.39.2",
     "@types/node": "^22.19.3",
     "@types/vscode": "^1.100.0",
-    "@typescript-eslint/eslint-plugin": "^8.51.0",
-    "@typescript-eslint/parser": "^8.51.0",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.7.1",
     "esbuild": "^0.27.2",
@@ -35,7 +35,7 @@
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "tslib": "^2.8.1",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.51.0"
+    "typescript-eslint": "^8.54.0"
   },
   "activationEvents": [
     "onLanguage:beancount"
