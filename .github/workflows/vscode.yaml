@@ -27,8 +27,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: vscode
 
-      - run: pnpm run -C vscode lint
+      - run: pnpm run lint
         working-directory: vscode
 
-      - run: pnpm run -C vscode build
+      - run: pnpm run build
         working-directory: vscode
