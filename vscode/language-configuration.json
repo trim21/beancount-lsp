@@ -1,0 +1,10 @@
+{
+  "comments": {
+    "lineComment": {
+      "comment": ";"
+    }
+  },
+  "autoClosingPairs": [
+    { "open": "\"", "close": "\"", "notIn": ["string", "comment"] }
+  ]
+}

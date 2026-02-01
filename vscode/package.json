@@ -1,0 +1,106 @@
+{
+  "name": "beancount-lsp",
+  "displayName": "beancount-lsp",
+  "description": "beancount language server",
+  "author": "trim21",
+  "license": "MIT",
+  "version": "0.0.1",
+  "repository": "https://github.com/trim21/beancount-lsp",
+  "homepage": "https://github.com/trim21/beancount-lsp",
+  "publisher": "trim21",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "scripts": {
+    "package": "pnpm exec vsce package --no-dependencies -o dist/beancount-lsp.vsix",
+    "build-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node20 --sourcemap",
+    "build": "pnpm run build-base && pnpm run package",
+    "lint": "eslint -c eslint.config.mjs --ext .ts ./src"
+  },
+  "packageManager": "pnpm@10.26.2",
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^22.19.3",
+    "@types/vscode": "^1.100.0",
+    "@typescript-eslint/eslint-plugin": "^8.51.0",
+    "@typescript-eslint/parser": "^8.51.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.2",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.51.0"
+  },
+  "activationEvents": [
+    "onLanguage:beancount"
+  ],
+  "main": "./out/extension",
+  "contributes": {
+    "commands": [
+      {
+        "command": "beancountLangServer.restartServer",
+        "title": "Beancount: Restart Language Server"
+      },
+      {
+        "command": "beancountLangServer.startServer",
+        "title": "Beancount: Start Language Server"
+      },
+      {
+        "command": "beancountLangServer.stopServer",
+        "title": "Beancount: Stop Language Server"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Beancount Language Server Configuration",
+      "properties": {
+        "beancount.root_file": {
+          "scope": "resource",
+          "type": "string",
+          "default": "",
+          "description": "Path to the main beancount file"
+        },
+        "beancount.server_path": {
+          "scope": "resource",
+          "type": "string",
+          "default": "",
+          "description": "Path to the beancount-lsp executable"
+        },
+        "beancount.log_level": {
+          "scope": "window",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error",
+            "off",
+            null
+          ],
+          "default": null,
+          "description": "Log level for the language server."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "beancount",
+        "extensions": [
+          ".beancount",
+          ".bean"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ]
+  }
+}

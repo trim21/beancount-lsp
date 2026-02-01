@@ -1,0 +1,33 @@
+name: vscode ci
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'vscode/v[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: vscode/package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: vscode
+
+      - run: pnpm run build
+        working-directory: vscode
+
+      - name: Publish
+        working-directory: vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: pnpm exec vsce publish --no-dependencies --packagePath "dist/beancount-lsp.vsix" --pat "$VSCE_PAT"

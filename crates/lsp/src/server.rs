@@ -55,7 +55,7 @@ struct InnerBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct InitializeConfig {
-    pub journal_file: PathBuf,
+    pub root_file: PathBuf,
 }
 
 fn canonical_or_original(path: &Path) -> PathBuf {
@@ -471,9 +471,9 @@ impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let config = parse_initialize_config(&params)?;
 
-        info!(root_file = %config.journal_file.display(), "received initialization config");
+        info!(root_file = %config.root_file.display(), "received initialization config");
 
-        let root_path = canonical_or_original(&config.journal_file);
+        let root_path = canonical_or_original(&config.root_file);
         {
             let mut guard = self.inner.write().await;
             if guard.is_some() {

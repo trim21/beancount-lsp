@@ -20,3 +20,17 @@ tasks:
     desc: (Placeholder) Python package has no tests; runs cargo checks for the pyo3 crate
     cmds:
       - cargo test -p beancount-lsp-py
+
+  build:vscode:
+    desc: (Placeholder) Python package has no tests; runs cargo checks for the pyo3 crate
+    cmds:
+      - pnpm run -C vscode build
+
+  bump:vscode:
+    vars:
+      VERSION:
+        sh: jq '.version' vscode/package.json
+    cmds:
+      - git add vscode/package.json
+      - 'git commit -m "release(vscode): {{.VERSION}}"'
+      - 'git tag "vscode/v{{.VERSION}}" -m "vscode/v{{.VERSION}}"'

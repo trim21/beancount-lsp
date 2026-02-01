@@ -1,0 +1,7 @@
+node_modules
+server
+out
+*.vsix
+.cache
+!dist/
+server/
