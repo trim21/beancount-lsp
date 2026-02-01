@@ -94,13 +94,7 @@ pub fn account_at_position(doc: &Document, position: Position) -> Option<(String
             let start = byte_to_lsp_position(&doc.rope, start_byte)?;
             let end = byte_to_lsp_position(&doc.rope, end_byte)?;
 
-            return Some((
-                text,
-                Range {
-                    start,
-                    end,
-                },
-            ));
+            return Some((text, Range { start, end }));
         }
 
         let mut cursor = node.walk();

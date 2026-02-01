@@ -228,10 +228,12 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     let in_account_node = is_within_kind(doc, position, NodeKind::Account);
     let in_tag_node = is_within_kind(doc, position, NodeKind::Tag);
 
-    if indent == 0 && has_date_prefix(&line_slice, indent) && !in_account_node {
-        if let Some((prefix, range)) = tag_prefix_at_position(doc, position) {
-            return Some(CompletionMode::Tag { prefix, range });
-        }
+    if indent == 0
+        && has_date_prefix(&line_slice, indent)
+        && !in_account_node
+        && let Some((prefix, range)) = tag_prefix_at_position(doc, position)
+    {
+        return Some(CompletionMode::Tag { prefix, range });
     }
 
     // Prefer a tree-based context: walk ancestors to see if we're in posting/open/balance.
@@ -276,23 +278,23 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
         };
     }
 
-    if allow_account {
-        if let Some((prefix, range)) = token_prefix_at_position(doc, position, true, false) {
-            // Avoid treating amount/price fields as accounts; require token to start alphabetic.
-            let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
-            let token_end = lsp_position_to_byte(&doc.rope, range.end)?;
-            let token = doc.rope.byte_slice(token_start..token_end).to_string();
-            if indent > 0 && range.start.character != u32::try_from(indent).ok()? {
-                return None;
-            }
-            if token
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_alphabetic())
-                .unwrap_or(false)
-            {
-                return Some(CompletionMode::Account { prefix, range });
-            }
+    if allow_account
+        && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, false)
+    {
+        // Avoid treating amount/price fields as accounts; require token to start alphabetic.
+        let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
+        let token_end = lsp_position_to_byte(&doc.rope, range.end)?;
+        let token = doc.rope.byte_slice(token_start..token_end).to_string();
+        if indent > 0 && range.start.character != u32::try_from(indent).ok()? {
+            return None;
+        }
+        if token
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic())
+            .unwrap_or(false)
+        {
+            return Some(CompletionMode::Account { prefix, range });
         }
     }
 
@@ -301,34 +303,31 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
         && rel >= indent + 10
         && !in_account_node
         && !in_tag_node
+        && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
+        && DATE_KEYWORDS
+            .iter()
+            .any(|label| fuzzy_match(label, &prefix))
     {
-        if let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true) {
-            if DATE_KEYWORDS
-                .iter()
-                .any(|label| fuzzy_match(label, &prefix))
-            {
-                return Some(CompletionMode::Keyword {
-                    prefix,
-                    range,
-                    variants: DATE_KEYWORDS,
-                });
-            }
-        }
+        return Some(CompletionMode::Keyword {
+            prefix,
+            range,
+            variants: DATE_KEYWORDS,
+        });
     }
 
-    if indent == 0 && !in_account_node && !in_tag_node {
-        if let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true) {
-            if ROOT_KEYWORDS
-                .iter()
-                .any(|label| fuzzy_match(label, &prefix))
-            {
-                return Some(CompletionMode::Keyword {
-                    prefix,
-                    range,
-                    variants: ROOT_KEYWORDS,
-                });
-            }
-        }
+    if indent == 0
+        && !in_account_node
+        && !in_tag_node
+        && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
+        && ROOT_KEYWORDS
+            .iter()
+            .any(|label| fuzzy_match(label, &prefix))
+    {
+        return Some(CompletionMode::Keyword {
+            prefix,
+            range,
+            variants: ROOT_KEYWORDS,
+        });
     }
 
     None
@@ -437,10 +436,10 @@ pub fn completion(
                                 .rope
                                 .byte_slice(node.start_byte()..node.end_byte())
                                 .to_string();
-                            if let Some(stripped) = text.strip_prefix('#') {
-                                if !stripped.is_empty() {
-                                    tags.insert(stripped.to_string());
-                                }
+                            if let Some(stripped) = text.strip_prefix('#')
+                                && !stripped.is_empty()
+                            {
+                                tags.insert(stripped.to_string());
                             }
                         }
 

@@ -4,7 +4,7 @@ use beancount_parser::core;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Url};
 
 use crate::providers::account::account_at_position;
-use crate::server::{find_document, Document};
+use crate::server::{Document, find_document};
 
 fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<String> {
     let mut notes = Vec::new();
@@ -25,8 +25,8 @@ fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<S
 pub fn hover(documents: &HashMap<Url, Document>, params: &HoverParams) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
-    let (account, account_range) = find_document(documents, uri)
-        .and_then(|doc| account_at_position(doc, position))?;
+    let (account, account_range) =
+        find_document(documents, uri).and_then(|doc| account_at_position(doc, position))?;
 
     let notes = notes_for_account(documents, &account);
     if notes.is_empty() {
