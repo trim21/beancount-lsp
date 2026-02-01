@@ -20,6 +20,12 @@
       "enabled": false
     },
     {
+      "matchPackageNames": [
+        "@types/vscode"
+      ],
+      "enabled": false
+    },
+    {
       "matchDepNames": [
         "beancount-tree-sitter",
         "beancount-parser"
