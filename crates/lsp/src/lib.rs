@@ -153,7 +153,8 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
         Command::Serve(Serve { root_file }) => root_file.clone(),
     };
 
-    let (service, socket) = LspService::build(move |client| Backend::new(root_file.clone(), client)).finish();
+    let (service, socket) =
+        LspService::build(move |client| Backend::new(root_file.clone(), client)).finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 
     Ok(())
