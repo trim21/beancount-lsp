@@ -3,4 +3,5 @@ server
 out
 *.vsix
 .cache
+!dist/
 server/
