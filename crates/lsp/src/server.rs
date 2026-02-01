@@ -51,7 +51,6 @@ pub struct Backend {
 
 struct InnerBackend {
     documents: HashMap<Url, Document>,
-    root_file: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -480,7 +479,6 @@ impl LanguageServer for Backend {
             if guard.is_some() {
                 return Err(Error::invalid_params("initializationOptions already set"));
             }
-            let root_file = root_path.clone();
 
             let documents = Self::load_journal_tree(&root_path).unwrap_or_else(|e| {
                 tracing::warn!("failed to load journal tree: {e}");
@@ -489,7 +487,6 @@ impl LanguageServer for Backend {
 
             *guard = Some(InnerBackend {
                 documents,
-                root_file,
             });
         }
 
