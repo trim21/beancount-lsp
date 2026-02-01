@@ -30,7 +30,7 @@
     },
     {
       "matchPackageNames": [
-        "vscode",
+        "microsoft/vscode",
         "@types/vscode"
       ],
       "enabled": false
