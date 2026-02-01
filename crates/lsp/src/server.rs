@@ -606,7 +606,7 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        tracing::info!("completion triggered");
+        tracing::debug!("completion triggered");
 
         self.with_inner(|inner| completion::completion(&inner.documents, &params))
             .await
