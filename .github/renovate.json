@@ -21,6 +21,15 @@
     },
     {
       "matchPackageNames": [
+        "beancount"
+      ],
+      "matchManagers": [
+        "pep621"
+      ],
+      "enabled": false
+    },
+    {
+      "matchPackageNames": [
         "vscode",
         "@types/vscode"
       ],
