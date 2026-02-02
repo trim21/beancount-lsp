@@ -3,6 +3,7 @@ use std::iter;
 use std::path::PathBuf;
 
 mod checkers;
+mod doc;
 mod providers;
 mod server;
 mod text;

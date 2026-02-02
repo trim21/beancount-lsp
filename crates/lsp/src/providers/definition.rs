@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
-use beancount_tree_sitter::{NodeKind, tree_sitter};
-use ropey::Rope;
+use beancount_parser::ast;
 use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Range, Url};
 
 use crate::providers::account::account_at_position;
-use crate::server::{Document, find_document};
-use crate::text::ts_point_to_lsp_position;
+use crate::doc::{Document, find_document};
+use crate::text::byte_to_lsp_position;
 
 fn collect_open_definitions(
     doc: &Document,
@@ -14,59 +13,38 @@ fn collect_open_definitions(
     account: &str,
     locations: &mut Vec<Location>,
 ) {
-    let rope = &doc.rope;
-    collect_nodes(doc.tree.root_node(), rope, uri, account, locations);
-}
+    for directive in doc.ast() {
+        if let ast::Directive::Open(open) = directive {
+            if open.account.content != account {
+                continue;
+            }
 
-fn collect_nodes(
-    node: tree_sitter::Node,
-    rope: &Rope,
-    uri: &Url,
-    account: &str,
-    out: &mut Vec<Location>,
-) {
-    if NodeKind::from(node.kind()) == NodeKind::Account
-        && let Some(parent) = node.parent()
-        && NodeKind::from(parent.kind()) == NodeKind::Open
-    {
-        let text = rope
-            .byte_slice(node.start_byte()..node.end_byte())
-            .to_string()
-            .trim()
-            .to_owned();
-
-        if text == account
-            && let (Some(start), Some(end)) = (
-                ts_point_to_lsp_position(rope, node.start_position()),
-                ts_point_to_lsp_position(rope, node.end_position()),
-            )
-        {
-            out.push(Location {
-                uri: uri.clone(),
-                range: Range { start, end },
-            });
+            if let (Some(start), Some(end)) = (
+                byte_to_lsp_position(&doc.rope, open.account.span.start),
+                byte_to_lsp_position(&doc.rope, open.account.span.end),
+            ) {
+                locations.push(Location {
+                    uri: uri.clone(),
+                    range: Range { start, end },
+                });
+            }
         }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_nodes(child, rope, uri, account, out);
     }
 }
 
 pub fn goto_definition(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, std::sync::Arc<Document>>,
     params: &GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
 
-    let (account, _) =
-        find_document(documents, uri).and_then(|doc| account_at_position(doc, position))?;
+    let (account, _) = find_document(documents, uri)
+        .and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
     let mut locations = Vec::new();
     for (doc_uri, doc) in documents.iter() {
-        collect_open_definitions(doc, doc_uri, &account, &mut locations);
+        collect_open_definitions(doc.as_ref(), doc_uri, &account, &mut locations);
     }
 
     if locations.is_empty() {
@@ -79,23 +57,10 @@ pub fn goto_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
     use tower_lsp::lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams};
 
     fn build_doc(uri: &Url, content: &str) -> Document {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Document {
-            directives,
-            content: content.to_owned(),
-            rope,
-            tree,
-        }
+        crate::doc::build_document(content, uri.as_str()).expect("build document")
     }
 
     #[test]
@@ -109,8 +74,8 @@ mod tests {
         let txn_doc = build_doc(&txn_uri, txn_content);
 
         let mut docs = HashMap::new();
-        docs.insert(open_uri.clone(), open_doc);
-        docs.insert(txn_uri.clone(), txn_doc);
+        docs.insert(open_uri.clone(), std::sync::Arc::new(open_doc));
+        docs.insert(txn_uri.clone(), std::sync::Arc::new(txn_doc));
 
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {

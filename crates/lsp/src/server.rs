@@ -5,10 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Result as AnyResult, anyhow};
-use beancount_parser::{core, parse_str};
-use beancount_tree_sitter::{language, tree_sitter};
+use beancount_parser::core;
 use glob::glob;
-use ropey::Rope;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task;
@@ -28,38 +26,13 @@ use tower_lsp::{Client, LanguageServer};
 use tracing::info;
 
 use crate::checkers::{self, Checker, CheckerDiagnostic};
+use crate::doc::{Document, build_document, find_document};
 use crate::providers::definition;
 use crate::providers::{completion, hover, semantic_tokens};
 
 fn url_normalized_key(url: &Url) -> Option<String> {
     let path = url.to_file_path().ok()?;
     Some(normalized_path_key(&path))
-}
-
-/// Find a document by URI, tolerating platform-specific path casing/format differences.
-pub(crate) fn find_document<'a>(
-    documents: &'a HashMap<Url, Document>,
-    uri: &Url,
-) -> Option<&'a Document> {
-    if let Some(doc) = documents.get(uri) {
-        return Some(doc);
-    }
-
-    let target = url_normalized_key(uri)?;
-
-    documents.iter().find_map(|(key, doc)| {
-        url_normalized_key(key)
-            .filter(|candidate| candidate == &target)
-            .map(|_| doc)
-    })
-}
-
-#[derive(Clone)]
-pub struct Document {
-    pub directives: Vec<core::CoreDirective>,
-    pub content: String,
-    pub rope: Rope,
-    pub tree: tree_sitter::Tree,
 }
 
 #[derive(Clone)]
@@ -73,7 +46,7 @@ pub struct Backend {
 }
 
 struct InnerBackend {
-    documents: HashMap<Url, Document>,
+    documents: HashMap<Url, Arc<Document>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -105,7 +78,7 @@ fn canonical_or_original(path: &Path) -> PathBuf {
     strip_windows_verbatim_prefix(&canonical)
 }
 
-fn normalized_path_key(path: &Path) -> String {
+pub(crate) fn normalized_path_key(path: &Path) -> String {
     let raw = path.to_string_lossy();
 
     // Normalize Windows-specific prefixes and separators so we can reliably dedupe
@@ -299,29 +272,10 @@ impl Backend {
     }
 
     fn parse_document(text: &str, filename: &str) -> Option<Document> {
-        let content = text.to_owned();
-
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).ok()?;
-        let tree = parser.parse(&content, None)?;
-
-        // Tree-sitter can still produce a tree for partially invalid input; keep that so
-        // providers and the checker see the latest text even when the beancount parser fails.
-        let directives = parse_str(&content, filename)
-            .ok()
-            .and_then(|ast| core::normalize_directives(ast).ok())
-            .unwrap_or_default();
-
-        let rope = Rope::from_str(&content);
-        Some(Document {
-            directives,
-            content,
-            rope,
-            tree,
-        })
+        build_document(text, filename)
     }
 
-    fn load_journal_tree(journal_file: &Path) -> AnyResult<HashMap<Url, Document>> {
+    fn load_journal_tree(journal_file: &Path) -> AnyResult<HashMap<Url, Arc<Document>>> {
         fn to_url(path: &Path) -> Option<Url> {
             Url::from_file_path(path).ok()
         }
@@ -400,7 +354,7 @@ impl Backend {
             ));
         }
 
-        let mut documents: HashMap<Url, Document> = HashMap::new();
+        let mut documents: HashMap<Url, Arc<Document>> = HashMap::new();
 
         let mut queue: VecDeque<PathBuf> = VecDeque::new();
         let mut queued: HashSet<String> = HashSet::new();
@@ -452,7 +406,7 @@ impl Backend {
                 }
             }
 
-            documents.insert(uri, doc);
+            documents.insert(uri, Arc::new(doc));
 
             tracing::info!(file = %canonical.display(), "loaded beancount file");
         }
@@ -492,7 +446,7 @@ impl Backend {
                             inner.documents.remove(&k);
                         }
                     }
-                    inner.documents.insert(uri.clone(), doc);
+                    inner.documents.insert(uri.clone(), Arc::new(doc));
                 })
                 .await
         {
@@ -643,9 +597,9 @@ impl LanguageServer for Backend {
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri;
         let text = self
-            .with_inner(|inner| find_document(&inner.documents, &uri).cloned())
+            .with_inner(|inner| find_document(&inner.documents, &uri))
             .await?;
-        Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(&doc.content)))
+        Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(doc.content())))
     }
 }
 

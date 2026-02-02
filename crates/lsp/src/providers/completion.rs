@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use beancount_chumsky::parse_str as chumsky_parse_str;
 use beancount_parser::core;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
     Position, Range, TextEdit, Url,
 };
 
-use crate::server::{Document, find_document};
+use crate::doc::{Document, find_document};
 use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
 const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note"];
@@ -171,44 +170,41 @@ fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
         .unwrap_or(false)
 }
 
-fn parse_core_directives(content: &str, filename: &str) -> Vec<core::CoreDirective> {
-    let Ok(ast) = chumsky_parse_str(content, filename) else {
-        return Vec::new();
-    };
+fn is_transaction_header_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if !has_date_prefix(trimmed, 0) {
+        return false;
+    }
 
-    core::normalize_directives(ast).unwrap_or_default()
+    let rest = trimmed.get(10..).unwrap_or("");
+    let mut parts = rest.split_whitespace();
+    let first = parts.next();
+    matches!(first, Some("*") | Some("!") | Some("txn"))
 }
 
-fn is_tag_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
-}
+fn last_token_before(line: &str, rel: usize) -> Option<&str> {
+    let mut token_start: Option<usize> = None;
+    let mut last_token: Option<&str> = None;
 
-fn extract_tags_from_text(content: &str) -> HashSet<String> {
-    let mut tags = HashSet::new();
+    for (idx, ch) in line.char_indices() {
+        if idx >= rel {
+            break;
+        }
 
-    for line in content.lines() {
-        let mut iter = line.char_indices();
-        while let Some((idx, ch)) = iter.next() {
-            if ch != '#' {
-                continue;
+        if ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                last_token = line.get(start..idx);
             }
-
-            let start = idx + ch.len_utf8();
-            let mut end = start;
-            for (offset, c) in line[start..].char_indices() {
-                if !is_tag_char(c) {
-                    break;
-                }
-                end = start + offset + c.len_utf8();
-            }
-
-            if end > start {
-                tags.insert(line[start..end].to_string());
-            }
+        } else if token_start.is_none() {
+            token_start = Some(idx);
         }
     }
 
-    tags
+    if let Some(start) = token_start {
+        last_token = line.get(start..rel);
+    }
+
+    last_token
 }
 
 fn determine_completion_context(doc: &Document, position: Position) -> Option<CompletionMode> {
@@ -237,7 +233,25 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     let mut allow_account = false;
     if !allow_account {
         allow_account = if indent > 0 {
-            true
+            let mut prev_line = None;
+            for idx in (0..line).rev() {
+                let start = doc.rope.line_to_byte(idx);
+                let end = if idx + 1 < doc.rope.len_lines() {
+                    doc.rope.line_to_byte(idx + 1)
+                } else {
+                    doc.rope.len_bytes()
+                };
+                let slice = doc.rope.byte_slice(start..end).to_string();
+                if !slice.trim().is_empty() {
+                    prev_line = Some(slice);
+                    break;
+                }
+            }
+
+            prev_line
+                .as_deref()
+                .map(is_transaction_header_line)
+                .unwrap_or(false)
         } else {
             let mut parts = trimmed.split_whitespace();
             let first = parts.next();
@@ -247,7 +261,7 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     }
 
     if allow_account
-        && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, false)
+        && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, true)
     {
         // Avoid treating amount/price fields as accounts; require token to start alphabetic.
         let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
@@ -256,6 +270,17 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
         if indent > 0 && range.start.character != u32::try_from(indent).ok()? {
             return None;
         }
+
+        if token.is_empty() {
+            if indent == 0 {
+                let last = last_token_before(&line_slice, rel).unwrap_or_default();
+                if !matches!(last, "open" | "balance") {
+                    return None;
+                }
+            }
+            return Some(CompletionMode::Account { prefix, range });
+        }
+
         if token
             .chars()
             .next()
@@ -313,14 +338,14 @@ fn fuzzy_match(candidate: &str, prefix: &str) -> bool {
 }
 
 pub fn completion(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, std::sync::Arc<Document>>,
     params: &CompletionParams,
 ) -> Option<CompletionResponse> {
     let uri = &params.text_document_position.text_document.uri;
     let position = params.text_document_position.position;
     let doc = find_document(documents, uri)?;
 
-    let ctx = match determine_completion_context(doc, position) {
+    let ctx = match determine_completion_context(doc.as_ref(), position) {
         Some(ctx) => ctx,
         None => {
             return None;
@@ -335,11 +360,10 @@ pub fn completion(
             range: replace_range,
         } => {
             let mut accounts = HashSet::new();
-            for (uri, doc) in documents {
-                let directives = parse_core_directives(&doc.content, uri.as_str());
-                for dir in directives {
+            for doc in documents.values() {
+                for dir in doc.directives.iter() {
                     if let core::CoreDirective::Open(o) = dir {
-                        accounts.insert(o.account);
+                        accounts.insert(o.account.clone());
                     }
                 }
             }
@@ -381,19 +405,16 @@ pub fn completion(
             range: replace_range,
         } => {
             let mut tags = HashSet::new();
-            for (uri, doc) in documents {
-                let directives = parse_core_directives(&doc.content, uri.as_str());
-                for dir in directives {
+            for doc in documents.values() {
+                for dir in doc.directives.iter() {
                     if let core::CoreDirective::Transaction(tx) = dir {
-                        for tag in tx.tags {
+                        for tag in tx.tags.iter() {
                             if !tag.is_empty() {
-                                tags.insert(tag);
+                                tags.insert(tag.clone());
                             }
                         }
                     }
                 }
-
-                tags.extend(extract_tags_from_text(&doc.content));
             }
 
             tags.into_iter()
@@ -423,8 +444,8 @@ pub fn completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beancount_tree_sitter::{language, tree_sitter};
     use std::collections::HashSet;
+    use std::sync::Arc;
     use tower_lsp::lsp_types::{
         CompletionContext, CompletionTriggerKind, Position, TextDocumentIdentifier,
         TextDocumentPositionParams,
@@ -454,21 +475,9 @@ mod tests {
         let content = content_lines.join("\n");
 
         let _uri = Url::parse("file:///completion-helper.bean").unwrap();
-        let directives = parse_core_directives(&content, _uri.as_str());
-        let rope = ropey::Rope::from_str(&content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(&content, None).unwrap();
+        let doc = crate::doc::build_document(&content, _uri.as_str()).expect("build document");
 
-        (
-            Document {
-                directives,
-                content,
-                rope,
-                tree,
-            },
-            cursor,
-        )
+        (doc, cursor)
     }
 
     fn determine_context_helper(lines: &[&str]) -> Option<CompletionMode> {
@@ -488,17 +497,7 @@ mod tests {
     }
 
     fn build_doc(uri: &Url, content: &str) -> Document {
-        let directives = parse_core_directives(content, uri.as_str());
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Document {
-            directives,
-            content: content.to_owned(),
-            rope,
-            tree,
-        }
+        crate::doc::build_document(content, uri.as_str()).expect("build document")
     }
 
     #[test]
@@ -508,7 +507,7 @@ mod tests {
         let doc = build_doc(&uri, content);
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         let position = Position::new(0, 25); // after "Assets:Ca"
         let params = CompletionParams {
@@ -552,7 +551,7 @@ mod tests {
         let uri = Url::parse("file:///completion-helper.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -626,8 +625,8 @@ mod tests {
         let bal_doc = build_doc(&bal_uri, &bal_content);
 
         let mut documents = HashMap::new();
-        documents.insert(open_uri.clone(), open_doc);
-        documents.insert(bal_uri.clone(), bal_doc);
+        documents.insert(open_uri.clone(), Arc::new(open_doc));
+        documents.insert(bal_uri.clone(), Arc::new(bal_doc));
 
         // Cursor at the marker position (after removal)
         let position = Position::new(0, u32::try_from(cursor_col).unwrap());
@@ -668,13 +667,65 @@ mod tests {
     }
 
     #[test]
+    fn completes_balance_account_when_missing() {
+        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_content = "2026-02-25 open Assets:Cash                             CNY\n";
+        let open_doc = build_doc(&open_uri, open_content);
+
+        let lines = [r#"2026-02-26 balance |                                  0 CNY"#];
+        let (bal_doc, position) = doc_with_cursor(&lines);
+        let bal_uri = Url::parse("file:///bal.bean").unwrap();
+
+        let mut documents = HashMap::new();
+        documents.insert(open_uri.clone(), Arc::new(open_doc));
+        documents.insert(bal_uri.clone(), Arc::new(bal_doc));
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: bal_uri.clone(),
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let response = completion(&documents, &params).expect("got completion");
+        let items = match response {
+            CompletionResponse::Array(items) => items,
+            _ => panic!("unexpected completion response"),
+        };
+
+        let item = items
+            .iter()
+            .find(|i| i.label == "Assets:Cash")
+            .expect("expected account item");
+
+        let edit = match item.text_edit.as_ref().expect("text edit") {
+            CompletionTextEdit::Edit(e) => e,
+            _ => panic!("unexpected insert replace edit"),
+        };
+
+        let cursor_col = lines[0].find('|').expect("cursor marker present");
+        let expected_col = u32::try_from(cursor_col).unwrap();
+        assert_eq!(edit.range.start, Position::new(0, expected_col));
+        assert_eq!(edit.range.end, Position::new(0, expected_col));
+        assert_eq!(edit.new_text, "Assets:Cash");
+    }
+
+    #[test]
     fn completes_when_cursor_at_account_end() {
         let uri = Url::parse("file:///main.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n";
         let doc = build_doc(&uri, content);
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         // Cursor immediately after the account token
         let position = Position::new(0, 27);
@@ -719,7 +770,7 @@ mod tests {
         let doc = build_doc(&uri, content);
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         let position = Position::new(1, 14); // inside the payee string, not an account node
         let params = CompletionParams {
@@ -757,8 +808,8 @@ mod tests {
         let tx_uri = Url::parse("file:///txn.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(open_uri.clone(), open_doc);
-        documents.insert(tx_uri.clone(), tx_doc);
+        documents.insert(open_uri.clone(), Arc::new(open_doc));
+        documents.insert(tx_uri.clone(), Arc::new(tx_doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -793,8 +844,8 @@ mod tests {
         let tx_uri = Url::parse("file:///txn2.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(open_uri.clone(), open_doc);
-        documents.insert(tx_uri.clone(), tx_doc);
+        documents.insert(open_uri.clone(), Arc::new(open_doc));
+        documents.insert(tx_uri.clone(), Arc::new(tx_doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -819,6 +870,132 @@ mod tests {
     }
 
     #[test]
+    fn suppresses_account_completion_after_balance_directive() {
+        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_content = "2026-02-25 open Assets:Cash                             CNY\n";
+        let open_doc = build_doc(&open_uri, open_content);
+
+        let lines = [r#"2026-02-26 balance Assets:Cash   0 CNY"#, r#"  |"#];
+        let (bal_doc, position) = doc_with_cursor(&lines);
+        let bal_uri = Url::parse("file:///bal.bean").unwrap();
+
+        let mut documents = HashMap::new();
+        documents.insert(open_uri.clone(), Arc::new(open_doc));
+        documents.insert(bal_uri.clone(), Arc::new(bal_doc));
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: bal_uri.clone(),
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let response = completion(&documents, &params);
+        assert!(
+            response.is_none(),
+            "expected no account completion after balance directive"
+        );
+    }
+
+    #[test]
+    fn suppresses_account_completion_after_balance_metadata() {
+        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_content = "2026-02-25 open Assets:Cash                             CNY\n";
+        let open_doc = build_doc(&open_uri, open_content);
+
+        let lines = [
+            r#"2026-02-26 balance Assets:Cash                        0 CNY"#,
+            r#"  time: "00:00:00""#,
+            r#"  |"#,
+        ];
+        let (bal_doc, position) = doc_with_cursor(&lines);
+        let bal_uri = Url::parse("file:///bal-meta.bean").unwrap();
+
+        let mut documents = HashMap::new();
+        documents.insert(open_uri.clone(), Arc::new(open_doc));
+        documents.insert(bal_uri.clone(), Arc::new(bal_doc));
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: bal_uri.clone(),
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let response = completion(&documents, &params);
+        assert!(
+            response.is_none(),
+            "expected no account completion after balance metadata"
+        );
+    }
+
+    #[test]
+    fn completes_account_after_transaction_header_with_extra_spacing() {
+        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_content = "2026-02-25 open Assets:Cash                             CNY\n";
+        let open_doc = build_doc(&open_uri, open_content);
+
+        let lines = [r#"2026-02-26   * \"\" \"\""#, r#"  |"#];
+        let (tx_doc, position) = doc_with_cursor(&lines);
+        let tx_uri = Url::parse("file:///txn.bean").unwrap();
+
+        let mut documents = HashMap::new();
+        documents.insert(open_uri.clone(), Arc::new(open_doc));
+        documents.insert(tx_uri.clone(), Arc::new(tx_doc));
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: tx_uri.clone(),
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let response = completion(&documents, &params).expect("got completion");
+        let items = match response {
+            CompletionResponse::Array(items) => items,
+            _ => panic!("unexpected completion response"),
+        };
+
+        let item = items
+            .iter()
+            .find(|i| i.label == "Assets:Cash")
+            .expect("expected account item");
+
+        let edit = match item.text_edit.as_ref().expect("text edit") {
+            CompletionTextEdit::Edit(e) => e,
+            _ => panic!("unexpected insert replace edit"),
+        };
+
+        assert_eq!(edit.range.start, Position::new(1, 2));
+        assert_eq!(edit.range.end, Position::new(1, 2));
+        assert_eq!(edit.new_text, "Assets:Cash");
+    }
+
+    #[test]
     fn completes_tags_after_hash_on_transaction() {
         let lines = [
             r#"2022-01-01 * "..." "..." #food"#,
@@ -831,7 +1008,7 @@ mod tests {
         let uri = Url::parse("file:///tags.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -882,7 +1059,7 @@ mod tests {
         let uri = Url::parse("file:///tags-prefix.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -932,8 +1109,8 @@ mod tests {
         let cursor_uri = Url::parse("file:///cursor-tags.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(tag_uri.clone(), tag_doc);
-        documents.insert(cursor_uri.clone(), cursor_doc);
+        documents.insert(tag_uri.clone(), Arc::new(tag_doc));
+        documents.insert(cursor_uri.clone(), Arc::new(cursor_doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -980,7 +1157,7 @@ mod tests {
         let uri = Url::parse("file:///kw.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -1027,7 +1204,7 @@ mod tests {
         let uri = Url::parse("file:///root.kw.bean").unwrap();
 
         let mut documents = HashMap::new();
-        documents.insert(uri.clone(), doc);
+        documents.insert(uri.clone(), Arc::new(doc));
 
         let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -1079,7 +1256,7 @@ mod tests {
         let doc = build_doc(&stored_uri, content);
 
         let mut documents = HashMap::new();
-        documents.insert(stored_uri.clone(), doc);
+        documents.insert(stored_uri.clone(), Arc::new(doc));
 
         let position = Position::new(0, 25);
         let params = CompletionParams {

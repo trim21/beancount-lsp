@@ -4,9 +4,12 @@ use beancount_parser::core;
 use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Url};
 
 use crate::providers::account::account_at_position;
-use crate::server::{Document, find_document};
+use crate::doc::{Document, find_document};
 
-fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<String> {
+fn notes_for_account(
+    documents: &HashMap<Url, std::sync::Arc<Document>>,
+    account: &str,
+) -> Vec<String> {
     let mut notes = Vec::new();
     for doc in documents.values() {
         for dir in &doc.directives {
@@ -22,11 +25,14 @@ fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<S
     notes
 }
 
-pub fn hover(documents: &HashMap<Url, Document>, params: &HoverParams) -> Option<Hover> {
+pub fn hover(
+    documents: &HashMap<Url, std::sync::Arc<Document>>,
+    params: &HoverParams,
+) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
-    let (account, account_range) =
-        find_document(documents, uri).and_then(|doc| account_at_position(doc, position))?;
+    let (account, account_range) = find_document(documents, uri)
+        .and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
     let notes = notes_for_account(documents, &account);
     if notes.is_empty() {
@@ -54,23 +60,10 @@ pub fn hover(documents: &HashMap<Url, Document>, params: &HoverParams) -> Option
 mod tests {
     use super::*;
     use crate::providers::account::account_at_position;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
     use tower_lsp::lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams};
 
     fn build_doc(uri: &Url, content: &str) -> Document {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Document {
-            directives,
-            content: content.to_owned(),
-            rope,
-            tree,
-        }
+        crate::doc::build_document(content, uri.as_str()).expect("build document")
     }
 
     #[test]
@@ -80,11 +73,11 @@ mod tests {
         let doc = build_doc(&uri, content);
 
         let mut docs = HashMap::new();
-        docs.insert(uri.clone(), doc);
+        docs.insert(uri.clone(), std::sync::Arc::new(doc));
 
         let cursor = Position::new(1, 20);
 
-        let hit = account_at_position(docs.get(&uri).unwrap(), cursor);
+        let hit = account_at_position(docs.get(&uri).unwrap().as_ref(), cursor);
         assert!(hit.is_some(), "expected account under cursor");
 
         let notes = notes_for_account(&docs, "Assets:Cash");
