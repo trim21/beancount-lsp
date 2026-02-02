@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 
 use beancount_tree_sitter::tree_sitter;
 use ropey::Rope;
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp_server::ls_types::{Position, Range};
 
 /// Convert an LSP UTF-16 position to a UTF-8 byte offset in the document.
 /// Returns None when the position is outside the current text (line or column too large).

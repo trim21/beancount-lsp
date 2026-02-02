@@ -1,5 +1,5 @@
 use beancount_tree_sitter::NodeKind;
-use tower_lsp::lsp_types::{Position, Range};
+use tower_lsp_server::ls_types::{Position, Range};
 
 use crate::server::Document;
 use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
@@ -113,7 +113,8 @@ mod tests {
     use beancount_parser::{core, parse_str};
     use beancount_tree_sitter::{language, tree_sitter};
     use ropey::Rope;
-    use tower_lsp::lsp_types::{Position, Url};
+    use std::str::FromStr;
+    use tower_lsp_server::ls_types::{Position, Uri as Url};
 
     fn build_doc(uri: &Url, content: &str) -> Document {
         let directives =
@@ -132,7 +133,7 @@ mod tests {
 
     #[test]
     fn finds_account_and_range() {
-        let uri = Url::parse("file:///account.bean").unwrap();
+        let uri = Url::from_str("file:///account.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n";
         let doc = build_doc(&uri, content);
 
@@ -146,7 +147,7 @@ mod tests {
 
     #[test]
     fn finds_account_when_cursor_at_token_end() {
-        let uri = Url::parse("file:///account.bean").unwrap();
+        let uri = Url::from_str("file:///account.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n";
         let doc = build_doc(&uri, content);
 
@@ -161,7 +162,7 @@ mod tests {
 
     #[test]
     fn returns_none_outside_account_nodes() {
-        let uri = Url::parse("file:///account.bean").unwrap();
+        let uri = Url::from_str("file:///account.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n2023-01-02 * \"Payee\" \"Narration\"\n";
         let doc = build_doc(&uri, content);
 

@@ -12,9 +12,8 @@ use ropey::Rope;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task;
-use tower_lsp::async_trait;
-use tower_lsp::jsonrpc::{Error, Result};
-use tower_lsp::lsp_types::{
+use tower_lsp_server::jsonrpc::{Error, Result};
+use tower_lsp_server::ls_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
     DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
@@ -22,9 +21,9 @@ use tower_lsp::lsp_types::{
     SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams,
     SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
     TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, Url,
+    TextDocumentSyncSaveOptions, Uri as Url,
 };
-use tower_lsp::{Client, LanguageServer};
+use tower_lsp_server::{Client, LanguageServer};
 use tracing::info;
 
 use crate::checkers::{self, Checker, CheckerDiagnostic};
@@ -32,8 +31,8 @@ use crate::providers::definition;
 use crate::providers::{completion, hover, semantic_tokens};
 
 fn url_normalized_key(url: &Url) -> Option<String> {
-    let path = url.to_file_path().ok()?;
-    Some(normalized_path_key(&path))
+    let path = url.to_file_path()?;
+    Some(normalized_path_key(path.as_ref()))
 }
 
 /// Find a document by URI, tolerating platform-specific path casing/format differences.
@@ -196,7 +195,7 @@ impl Backend {
         let this = self.clone();
 
         let root_uri: Url = Url::from_file_path(&root_file)
-            .map_err(|_| {
+            .ok_or_else(|| {
                 anyhow!(
                     "failed to convert root file to URI: {}",
                     root_file.display()
@@ -256,7 +255,7 @@ impl Backend {
                     for (filename, diag) in extra_diags {
                         let target_uri = filename
                             .and_then(|name| {
-                                Url::from_file_path(canonical_or_original(Path::new(&name))).ok()
+                                Url::from_file_path(canonical_or_original(Path::new(&name)))
                             })
                             .unwrap_or_else(|| root_uri.clone());
 
@@ -323,7 +322,7 @@ impl Backend {
 
     fn load_journal_tree(journal_file: &Path) -> AnyResult<HashMap<Url, Document>> {
         fn to_url(path: &Path) -> Option<Url> {
-            Url::from_file_path(path).ok()
+            Url::from_file_path(path)
         }
 
         fn resolve_include_path(base_file: &Path, raw: &str) -> PathBuf {
@@ -357,7 +356,7 @@ impl Backend {
                                     if entry.is_file() {
                                         let key = normalized_path_key(&entry);
                                         if queued.insert(key) {
-                                            queue.push_back(entry);
+                                            queue.push_back(entry.to_path_buf());
                                         }
                                     }
                                 }
@@ -505,7 +504,6 @@ impl Backend {
     }
 }
 
-#[async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let config = parse_initialize_config(&params)?;
@@ -543,8 +541,8 @@ impl LanguageServer for Backend {
 
         let semantic_tokens =
             SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
-                work_done_progress_options: tower_lsp::lsp_types::WorkDoneProgressOptions::default(
-                ),
+                work_done_progress_options:
+                    tower_lsp_server::ls_types::WorkDoneProgressOptions::default(),
                 legend: semantic_tokens::legend(),
                 range: None,
                 full: Some(SemanticTokensFullOptions::Bool(true)),
@@ -573,7 +571,7 @@ impl LanguageServer for Backend {
                     completion_item: None,
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
-                definition_provider: Some(tower_lsp::lsp_types::OneOf::Left(true)),
+                definition_provider: Some(tower_lsp_server::ls_types::OneOf::Left(true)),
                 semantic_tokens_provider: Some(semantic_tokens),
                 ..ServerCapabilities::default()
             },
@@ -654,7 +652,7 @@ mod tests {
     use super::Backend;
     use std::fs;
     use std::path::Path;
-    use tower_lsp::lsp_types::Url;
+    use tower_lsp_server::ls_types::Uri as Url;
 
     fn write_file(path: &Path, content: &str) {
         if let Some(parent) = path.parent() {
