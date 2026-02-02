@@ -119,12 +119,20 @@ mod tests {
     fn build_doc(uri: &Url, content: &str) -> Document {
         let directives =
             core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
+        let includes = directives
+            .iter()
+            .filter_map(|directive| match directive {
+                core::CoreDirective::Include(include) => Some(include.filename.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let rope = Rope::from_str(content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(content, None).unwrap();
         Document {
             directives,
+            includes,
             content: content.to_owned(),
             rope,
             tree,

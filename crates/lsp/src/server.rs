@@ -4,13 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{Result as AnyResult, anyhow};
-use beancount_parser::{core, parse_str};
-use beancount_tree_sitter::{language, tree_sitter};
-use glob::glob;
+use anyhow::anyhow;
+use beancount_parser::core;
+use beancount_tree_sitter::tree_sitter;
 use ropey::Rope;
 use serde::Deserialize;
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc, watch};
 use tokio::task;
 use tower_lsp_server::jsonrpc::{Error, Result};
 use tower_lsp_server::ls_types::{
@@ -27,12 +26,13 @@ use tower_lsp_server::{Client, LanguageServer};
 use tracing::info;
 
 use crate::checkers::{self, Checker, CheckerDiagnostic};
+use crate::indexer::{Indexer, canonical_or_original};
 use crate::providers::definition;
 use crate::providers::{completion, hover, semantic_tokens};
 
 fn url_normalized_key(url: &Url) -> Option<String> {
     let path = url.to_file_path()?;
-    Some(normalized_path_key(path.as_ref()))
+    Some(Indexer::normalized_path_key(path.as_ref()))
 }
 
 /// Find a document by URI, tolerating platform-specific path casing/format differences.
@@ -53,9 +53,64 @@ pub(crate) fn find_document<'a>(
     })
 }
 
+pub(crate) fn documents_bfs<'a>(
+    documents: &'a HashMap<Url, Document>,
+    root: &Url,
+) -> Vec<(Url, &'a Document)> {
+    let mut ordered = Vec::new();
+    let mut queue: VecDeque<Url> = VecDeque::new();
+    let mut visited: HashSet<String> = HashSet::new();
+
+    let Some(root_path) = root.to_file_path() else {
+        return ordered;
+    };
+    let root_key = Indexer::normalized_path_key(root_path.as_ref());
+    if !visited.insert(root_key) {
+        return ordered;
+    }
+    queue.push_back(root.clone());
+
+    while let Some(uri) = queue.pop_front() {
+        let Some(doc) = documents.get(&uri) else {
+            continue;
+        };
+        ordered.push((uri.clone(), doc));
+
+        for include in &doc.includes {
+            let path = Path::new(include);
+            let canonical = canonical_or_original(path);
+            let child_key = Indexer::normalized_path_key(canonical.as_ref());
+            if !visited.insert(child_key) {
+                continue;
+            }
+            if let Some(child_uri) = Url::from_file_path(&canonical) {
+                queue.push_back(child_uri);
+            } else {
+                tracing::warn!(file = %canonical.display(), "failed to convert include path to URI");
+            }
+        }
+    }
+
+    ordered
+}
+
+fn resolve_document_from_snapshot(
+    documents: &HashMap<Url, Document>,
+    uri: &Url,
+) -> Option<Document> {
+    if let Some(doc) = find_document(documents, uri) {
+        return Some(doc.clone());
+    }
+
+    let path = uri.to_file_path()?;
+    let content = fs::read_to_string(path.as_ref()).ok()?;
+    Indexer::parse_document(&content, path.as_ref())
+}
+
 #[derive(Clone)]
 pub struct Document {
     pub directives: Vec<core::CoreDirective>,
+    pub includes: Vec<String>,
     pub content: String,
     pub rope: Rope,
     pub tree: tree_sitter::Tree,
@@ -69,74 +124,24 @@ pub struct Backend {
     checker_queued: Arc<AtomicBool>,
     checker_tx: mpsc::UnboundedSender<()>,
     checker_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<()>>>>,
+    indexer_tx: mpsc::UnboundedSender<IndexerCommand>,
+    indexer_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<IndexerCommand>>>>,
 }
 
 struct InnerBackend {
-    documents: HashMap<Url, Document>,
+    snapshot_rx: watch::Receiver<Arc<HashMap<Url, Document>>>,
+    root_uri: Option<Url>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct InitializeConfig {
-    pub root_file: PathBuf,
+    pub root_file: Option<PathBuf>,
 }
 
-fn canonical_or_original(path: &Path) -> PathBuf {
-    fn strip_windows_verbatim_prefix(path: &Path) -> PathBuf {
-        if !cfg!(windows) {
-            return path.to_path_buf();
-        }
-
-        let raw = path.to_string_lossy();
-        if let Some(rest) = raw.strip_prefix("\\\\?\\UNC\\") {
-            // Convert verbatim UNC (\\?\UNC\server\share\...) into normal UNC (\\server\share\...)
-            return PathBuf::from(format!("\\\\{rest}"));
-        }
-
-        if let Some(rest) = raw.strip_prefix("\\\\?\\") {
-            // Convert verbatim drive paths (\\?\C:\...) into normal drive paths (C:\...)
-            return PathBuf::from(rest);
-        }
-
-        path.to_path_buf()
-    }
-
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    strip_windows_verbatim_prefix(&canonical)
+enum IndexerCommand {
+    Update { uri: Url, text: String },
 }
 
-fn normalized_path_key(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-
-    // Normalize Windows-specific prefixes and separators so we can reliably dedupe
-    // queued/visited entries (Windows paths are generally case-insensitive).
-    let normalized = raw.strip_prefix("\\\\?\\").unwrap_or(&raw);
-    let normalized = normalized
-        .strip_prefix("UNC\\")
-        .map(|rest| format!("\\\\{rest}"))
-        .unwrap_or_else(|| normalized.to_owned());
-    let normalized = normalized.replace('\\', "/");
-
-    if cfg!(windows) {
-        normalized.to_lowercase()
-    } else {
-        normalized
-    }
-}
-
-fn glob_pattern_if_any(path: &str) -> Option<String> {
-    if !(path.contains('*') || path.contains('?') || path.contains('[')) {
-        return None;
-    }
-
-    // Normalize Windows-specific path prefixes and separators so the `glob` crate
-    // can expand patterns reliably.
-    let pattern = path.strip_prefix("\\\\?\\").unwrap_or(path);
-    let pattern = pattern
-        .strip_prefix("UNC\\")
-        .map(|rest| format!("\\\\{rest}"))
-        .unwrap_or_else(|| pattern.to_owned());
-    Some(pattern.replace('\\', "/"))
-}
 
 fn checker_diagnostic_to_lsp(diag: CheckerDiagnostic, source: &str) -> Diagnostic {
     let line = diag.lineno.unwrap_or(0);
@@ -172,6 +177,7 @@ pub fn parse_initialize_config(params: &InitializeParams) -> Result<InitializeCo
 impl Backend {
     pub fn new(client: Client) -> Self {
         let (checker_tx, checker_rx) = mpsc::unbounded_channel();
+        let (indexer_tx, indexer_rx) = mpsc::unbounded_channel();
 
         Self {
             client,
@@ -180,6 +186,8 @@ impl Backend {
             checker_queued: Arc::new(AtomicBool::new(false)),
             checker_tx,
             checker_rx: Arc::new(Mutex::new(Some(checker_rx))),
+            indexer_tx,
+            indexer_rx: Arc::new(Mutex::new(Some(indexer_rx))),
         }
     }
 
@@ -211,6 +219,45 @@ impl Backend {
                     .await;
 
                 this.checker_queued.store(false, Ordering::SeqCst);
+            }
+        });
+    }
+
+    fn spawn_indexer_worker(
+        &self,
+        mut indexer: Indexer,
+        mut rx: mpsc::UnboundedReceiver<IndexerCommand>,
+        snapshot_tx: watch::Sender<Arc<HashMap<Url, Document>>>,
+    ) {
+        tokio::spawn(async move {
+            let mut pending: HashMap<Url, String> = HashMap::new();
+
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    IndexerCommand::Update { uri, text } => {
+                        pending.insert(uri, text);
+                    }
+                }
+
+                while let Ok(cmd) = rx.try_recv() {
+                    match cmd {
+                        IndexerCommand::Update { uri, text } => {
+                            pending.insert(uri, text);
+                        }
+                    }
+                }
+
+                let mut updated_any = false;
+                for (uri, text) in pending.drain() {
+                    if indexer.update_document(uri, text) {
+                        updated_any = true;
+                    }
+                }
+
+                if updated_any {
+                    let snapshot = Arc::new(indexer.documents().clone());
+                    let _ = snapshot_tx.send(snapshot);
+                }
             }
         });
     }
@@ -297,210 +344,39 @@ impl Backend {
         new_keys
     }
 
-    fn parse_document(text: &str, filename: &str) -> Option<Document> {
-        let content = text.to_owned();
-
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).ok()?;
-        let tree = parser.parse(&content, None)?;
-
-        // Tree-sitter can still produce a tree for partially invalid input; keep that so
-        // providers and the checker see the latest text even when the beancount parser fails.
-        let directives = parse_str(&content, filename)
-            .ok()
-            .and_then(|ast| core::normalize_directives(ast).ok())
-            .unwrap_or_default();
-
-        let rope = Rope::from_str(&content);
-        Some(Document {
-            directives,
-            content,
-            rope,
-            tree,
-        })
-    }
-
-    fn load_journal_tree(journal_file: &Path) -> AnyResult<HashMap<Url, Document>> {
-        fn to_url(path: &Path) -> Option<Url> {
-            Url::from_file_path(path)
-        }
-
-        fn resolve_include_path(base_file: &Path, raw: &str) -> PathBuf {
-            let raw_path = PathBuf::from(raw);
-            if raw_path.is_relative() {
-                if let Some(parent) = base_file.parent() {
-                    parent.join(raw_path)
-                } else {
-                    raw_path
-                }
-            } else {
-                raw_path
-            }
-        }
-
-        fn enqueue_includes(
-            base_file: &Path,
-            include_filename: &str,
-            queue: &mut VecDeque<PathBuf>,
-            queued: &mut HashSet<String>,
-        ) {
-            let resolved = resolve_include_path(base_file, include_filename);
-            let resolved_str = resolved.to_string_lossy();
-
-            if let Some(pattern) = glob_pattern_if_any(&resolved_str) {
-                match glob(&pattern) {
-                    Ok(entries) => {
-                        for entry in entries {
-                            match entry {
-                                Ok(entry) => {
-                                    if entry.is_file() {
-                                        let key = normalized_path_key(&entry);
-                                        if queued.insert(key) {
-                                            queue.push_back(entry.to_path_buf());
-                                        }
-                                    }
-                                }
-                                Err(err) => {
-                                    tracing::warn!(
-                                        base_file = %base_file.display(),
-                                        include = %include_filename,
-                                        pattern = %pattern,
-                                        error = %err,
-                                        "failed to expand include glob entry"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            base_file = %base_file.display(),
-                            include = %include_filename,
-                            pattern = %pattern,
-                            error = %err,
-                            "failed to expand include glob"
-                        );
-                    }
-                }
-                return;
-            }
-
-            let key = normalized_path_key(&resolved);
-            if queued.insert(key) {
-                queue.push_back(resolved);
-            }
-        }
-
-        let root = canonical_or_original(journal_file);
-        if !root.is_file() {
-            return Err(anyhow!(
-                "journal_file does not exist or is not a file: {}",
-                root.display()
-            ));
-        }
-
-        let mut documents: HashMap<Url, Document> = HashMap::new();
-
-        let mut queue: VecDeque<PathBuf> = VecDeque::new();
-        let mut queued: HashSet<String> = HashSet::new();
-        let mut visited: HashSet<String> = HashSet::new();
-
-        queued.insert(normalized_path_key(&root));
-        queue.push_back(root);
-
-        while let Some(path) = queue.pop_front() {
-            let canonical = canonical_or_original(&path);
-            let visit_key = normalized_path_key(&canonical);
-            if !visited.insert(visit_key) {
-                continue;
-            }
-
-            if !canonical.is_file() {
-                tracing::warn!(file = %canonical.display(), "skipping non-file path from includes");
-                continue;
-            }
-
-            let uri = match to_url(&canonical) {
-                Some(uri) => uri,
-                None => {
-                    tracing::warn!(file = %canonical.display(), "failed to convert path to URI");
-                    continue;
-                }
-            };
-
-            let content = match fs::read_to_string(&canonical) {
-                Ok(content) => content,
-                Err(err) => {
-                    tracing::warn!(file = %canonical.display(), error = %err, "failed to read beancount file");
-                    continue;
-                }
-            };
-
-            let filename_for_parser = canonical.display().to_string();
-            let doc = match Self::parse_document(&content, &filename_for_parser) {
-                Some(doc) => doc,
-                None => {
-                    tracing::warn!(file = %canonical.display(), "failed to parse beancount file");
-                    continue;
-                }
-            };
-
-            for directive in &doc.directives {
-                if let core::CoreDirective::Include(include) = directive {
-                    enqueue_includes(&canonical, &include.filename, &mut queue, &mut queued);
-                }
-            }
-
-            documents.insert(uri, doc);
-
-            tracing::info!(file = %canonical.display(), "loaded beancount file");
-        }
-
-        Ok(documents)
-    }
-
     async fn with_inner<R>(&self, f: impl FnOnce(&InnerBackend) -> R) -> Result<R> {
         let guard = self.inner.read().await;
         let inner = guard.as_ref().ok_or_else(Error::invalid_request)?;
         Ok(f(inner))
     }
 
-    async fn with_inner_mut<R>(&self, f: impl FnOnce(&mut InnerBackend) -> R) -> Result<R> {
-        let mut guard = self.inner.write().await;
-        let inner = guard.as_mut().ok_or_else(Error::invalid_request)?;
-        Ok(f(inner))
-    }
-
     async fn update_document(&self, uri: Url, text: String) {
-        let target_key = url_normalized_key(&uri);
-
-        if let Some(doc) = Self::parse_document(&text, uri.as_str())
-            && let Ok(()) = self
-                .with_inner_mut(|inner| {
-                    if let Some(target_key) = &target_key {
-                        // Avoid duplicate entries with the same normalized path (Windows casing).
-                        let dupes: Vec<Url> = inner
-                            .documents
-                            .keys()
-                            .filter(|existing| {
-                                url_normalized_key(existing).as_ref() == Some(target_key)
-                            })
-                            .cloned()
-                            .collect();
-                        for k in dupes {
-                            inner.documents.remove(&k);
-                        }
-                    }
-                    inner.documents.insert(uri.clone(), doc);
-                })
-                .await
+        let _ = self
+            .indexer_tx
+            .send(IndexerCommand::Update { uri, text });
+        if self
+            .inner
+            .read()
+            .await
+            .as_ref()
+            .and_then(|inner| inner.root_uri.as_ref())
+            .is_some()
         {
             self.enqueue_checker_run();
         }
     }
 
     async fn reparse(&self, _uri: &Url) {
-        self.enqueue_checker_run();
+        if self
+            .inner
+            .read()
+            .await
+            .as_ref()
+            .and_then(|inner| inner.root_uri.as_ref())
+            .is_some()
+        {
+            self.enqueue_checker_run();
+        }
     }
 }
 
@@ -508,25 +384,42 @@ impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let config = parse_initialize_config(&params)?;
 
-        info!(root_file = %config.root_file.display(), "received initialization config");
+        if let Some(root_file) = &config.root_file {
+            info!(root_file = %root_file.display(), "received initialization config");
+        } else {
+            info!("received initialization config without root_file");
+        }
 
-        let root_path = canonical_or_original(&config.root_file);
+        let root_path = config.root_file.as_ref().map(|path| canonical_or_original(path));
+        let root_uri = root_path
+            .as_ref()
+            .and_then(|path| Url::from_file_path(path));
         {
             let mut guard = self.inner.write().await;
             if guard.is_some() {
                 return Err(Error::invalid_params("initializationOptions already set"));
             }
 
-            let documents = Self::load_journal_tree(&root_path).unwrap_or_else(|e| {
-                tracing::warn!("failed to load journal tree: {e}");
-                HashMap::new()
-            });
+            let indexer = match root_path.as_ref() {
+                Some(path) => Indexer::from_journal(path).unwrap_or_else(|e| {
+                    tracing::warn!("failed to load journal tree: {e}");
+                    Indexer::new()
+                }),
+                None => Indexer::new(),
+            };
 
-            *guard = Some(InnerBackend { documents });
+            let initial_snapshot = Arc::new(indexer.documents().clone());
+            let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
+
+            *guard = Some(InnerBackend { snapshot_rx, root_uri });
+
+            if let Some(rx) = self.indexer_rx.lock().await.take() {
+                self.spawn_indexer_worker(indexer, rx, snapshot_tx);
+            }
         }
 
         // Start checker worker after initialization so the root file path is known.
-        if let Some(rx) = self.checker_rx.lock().await.take() {
+        if let (Some(root_path), Some(rx)) = (root_path, self.checker_rx.lock().await.take()) {
             self.spawn_checker_worker(root_path, rx);
         }
 
@@ -617,22 +510,60 @@ impl LanguageServer for Backend {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         tracing::debug!("completion triggered");
+        let current_uri = params.text_document_position.text_document.uri.clone();
 
-        self.with_inner(|inner| completion::completion(&inner.documents, &params))
-            .await
+        self.with_inner(|inner| {
+            let snapshot = inner.snapshot_rx.borrow().clone();
+            match &inner.root_uri {
+                Some(root_uri) => {
+                    completion::completion(snapshot.as_ref(), root_uri, &params)
+                }
+                None => {
+                    let doc = resolve_document_from_snapshot(snapshot.as_ref(), &current_uri)?;
+                    let mut docs = HashMap::new();
+                    docs.insert(current_uri.clone(), doc);
+                    completion::completion(&docs, &current_uri, &params)
+                }
+            }
+        })
+        .await
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        self.with_inner(|inner| hover::hover(&inner.documents, &params))
-            .await
+        let current_uri = params.text_document_position_params.text_document.uri.clone();
+        self.with_inner(|inner| {
+            let snapshot = inner.snapshot_rx.borrow().clone();
+            match &inner.root_uri {
+                Some(root_uri) => hover::hover(snapshot.as_ref(), root_uri, &params),
+                None => {
+                    let doc = resolve_document_from_snapshot(snapshot.as_ref(), &current_uri)?;
+                    let mut docs = HashMap::new();
+                    docs.insert(current_uri.clone(), doc);
+                    hover::hover(&docs, &current_uri, &params)
+                }
+            }
+        })
+        .await
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        self.with_inner(|inner| definition::goto_definition(&inner.documents, &params))
-            .await
+        let current_uri = params.text_document_position_params.text_document.uri.clone();
+        self.with_inner(|inner| {
+            let snapshot = inner.snapshot_rx.borrow().clone();
+            match &inner.root_uri {
+                Some(root_uri) => definition::goto_definition(snapshot.as_ref(), root_uri, &params),
+                None => {
+                    let doc = resolve_document_from_snapshot(snapshot.as_ref(), &current_uri)?;
+                    let mut docs = HashMap::new();
+                    docs.insert(current_uri.clone(), doc);
+                    definition::goto_definition(&docs, &current_uri, &params)
+                }
+            }
+        })
+        .await
     }
 
     async fn semantic_tokens_full(
@@ -641,7 +572,10 @@ impl LanguageServer for Backend {
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri;
         let text = self
-            .with_inner(|inner| find_document(&inner.documents, &uri).cloned())
+            .with_inner(|inner| {
+                let snapshot = inner.snapshot_rx.borrow().clone();
+                resolve_document_from_snapshot(snapshot.as_ref(), &uri)
+            })
             .await?;
         Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(&doc.content)))
     }
@@ -649,7 +583,7 @@ impl LanguageServer for Backend {
 
 #[cfg(test)]
 mod tests {
-    use super::Backend;
+    use crate::indexer::Indexer;
     use std::fs;
     use std::path::Path;
     use tower_lsp_server::ls_types::Uri as Url;
@@ -695,7 +629,8 @@ include "common.bean"
         write_file(&nested1, "\n");
         write_file(&nested2, "\n");
 
-        let docs = Backend::load_journal_tree(&root).unwrap();
+        let indexer = Indexer::from_journal(&root).unwrap();
+        let docs = indexer.documents();
 
         let expected_paths = [
             &root,

@@ -3,6 +3,8 @@ use std::iter;
 use std::path::PathBuf;
 
 mod checkers;
+mod indexer;
+pub use crate::indexer::Indexer;
 mod providers;
 mod server;
 mod text;
@@ -137,4 +139,8 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
     Server::new(stdin, stdout, socket).serve(service).await;
 
     Ok(())
+}
+
+pub fn parse_document_for_bench(text: &str, filename: &std::path::Path) {
+    crate::indexer::Indexer::parse_document_for_bench(text, filename);
 }
