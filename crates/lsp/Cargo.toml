@@ -12,6 +12,7 @@ pyo3 = ["dep:pyo3"]
 
 [dependencies]
 anyhow = "1.0.100"
+beancount-chumsky = { workspace = true }
 beancount-parser = { workspace = true }
 beancount-tree-sitter = { workspace = true }
 clap = { version = "4.5.56", features = ["derive"] }

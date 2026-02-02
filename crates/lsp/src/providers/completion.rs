@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
+use beancount_chumsky::parse_str as chumsky_parse_str;
 use beancount_parser::core;
-use beancount_tree_sitter::{NodeKind, tree_sitter};
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
     Position, Range, TextEdit, Url,
 };
 
 use crate::server::{Document, find_document};
-use crate::text::{byte_to_lsp_position, lsp_position_to_byte, lsp_position_to_ts_point};
+use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
 const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note"];
 const ROOT_KEYWORDS: &[&str] = &["include", "option"];
@@ -137,44 +137,6 @@ fn tag_prefix_at_position(doc: &Document, position: Position) -> Option<(String,
     ))
 }
 
-fn is_within_kind(doc: &Document, position: Position, target: NodeKind) -> bool {
-    let Some(point) = lsp_position_to_ts_point(&doc.rope, position) else {
-        return false;
-    };
-
-    let root = doc.tree.root_node();
-
-    let check_point = |p: tree_sitter::Point| {
-        let node = root
-            .named_descendant_for_point_range(p, p)
-            .or_else(|| root.descendant_for_point_range(p, p));
-
-        let mut current = node;
-        while let Some(node) = current {
-            if NodeKind::from(node.kind()) == target {
-                return true;
-            }
-            current = node.parent();
-        }
-
-        false
-    };
-
-    if check_point(point) {
-        return true;
-    }
-
-    if point.column > 0 {
-        let query_point = tree_sitter::Point {
-            row: point.row,
-            column: point.column.saturating_sub(1),
-        };
-        return check_point(query_point);
-    }
-
-    false
-}
-
 fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
     if line_slice.len() < indent + 10 {
         return false;
@@ -209,6 +171,46 @@ fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
         .unwrap_or(false)
 }
 
+fn parse_core_directives(content: &str, filename: &str) -> Vec<core::CoreDirective> {
+    let Ok(ast) = chumsky_parse_str(content, filename) else {
+        return Vec::new();
+    };
+
+    core::normalize_directives(ast).unwrap_or_default()
+}
+
+fn is_tag_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'
+}
+
+fn extract_tags_from_text(content: &str) -> HashSet<String> {
+    let mut tags = HashSet::new();
+
+    for line in content.lines() {
+        let mut iter = line.char_indices();
+        while let Some((idx, ch)) = iter.next() {
+            if ch != '#' {
+                continue;
+            }
+
+            let start = idx + ch.len_utf8();
+            let mut end = start;
+            for (offset, c) in line[start..].char_indices() {
+                if !is_tag_char(c) {
+                    break;
+                }
+                end = start + offset + c.len_utf8();
+            }
+
+            if end > start {
+                tags.insert(line[start..end].to_string());
+            }
+        }
+    }
+
+    tags
+}
+
 fn determine_completion_context(doc: &Document, position: Position) -> Option<CompletionMode> {
     let cursor_byte = lsp_position_to_byte(&doc.rope, position)?;
 
@@ -225,48 +227,14 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     let trimmed = line_slice.trim_start();
     let indent = line_slice.len().saturating_sub(trimmed.len());
 
-    let in_account_node = is_within_kind(doc, position, NodeKind::Account);
-    let in_tag_node = is_within_kind(doc, position, NodeKind::Tag);
-
     if indent == 0
         && has_date_prefix(&line_slice, indent)
-        && !in_account_node
         && let Some((prefix, range)) = tag_prefix_at_position(doc, position)
     {
         return Some(CompletionMode::Tag { prefix, range });
     }
 
-    // Prefer a tree-based context: walk ancestors to see if we're in posting/open/balance.
     let mut allow_account = false;
-    if in_account_node {
-        allow_account = true;
-    } else if let Some(point) = lsp_position_to_ts_point(&doc.rope, position) {
-        let query_point = tree_sitter::Point {
-            row: point.row,
-            column: point.column.saturating_sub(1),
-        };
-        let root = doc.tree.root_node();
-        if let Some(mut node) = root
-            .named_descendant_for_point_range(query_point, point)
-            .or_else(|| root.descendant_for_point_range(query_point, point))
-        {
-            loop {
-                let kind = NodeKind::from(node.kind());
-                if matches!(kind, NodeKind::Open | NodeKind::Balance) || node.kind() == "posting" {
-                    allow_account = true;
-                    break;
-                }
-
-                if let Some(parent) = node.parent() {
-                    node = parent;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    // Fallback heuristic: indented posting line or account-taking directives (open/balance).
     if !allow_account {
         allow_account = if indent > 0 {
             true
@@ -301,8 +269,6 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     if indent == 0
         && has_date_prefix(&line_slice, indent)
         && rel >= indent + 10
-        && !in_account_node
-        && !in_tag_node
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
         && DATE_KEYWORDS
             .iter()
@@ -316,8 +282,6 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     }
 
     if indent == 0
-        && !in_account_node
-        && !in_tag_node
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
         && ROOT_KEYWORDS
             .iter()
@@ -371,10 +335,11 @@ pub fn completion(
             range: replace_range,
         } => {
             let mut accounts = HashSet::new();
-            for doc in documents.values() {
-                for dir in &doc.directives {
+            for (uri, doc) in documents {
+                let directives = parse_core_directives(&doc.content, uri.as_str());
+                for dir in directives {
                     if let core::CoreDirective::Open(o) = dir {
-                        accounts.insert(o.account.clone());
+                        accounts.insert(o.account);
                     }
                 }
             }
@@ -416,40 +381,19 @@ pub fn completion(
             range: replace_range,
         } => {
             let mut tags = HashSet::new();
-            for doc in documents.values() {
-                for dir in &doc.directives {
+            for (uri, doc) in documents {
+                let directives = parse_core_directives(&doc.content, uri.as_str());
+                for dir in directives {
                     if let core::CoreDirective::Transaction(tx) = dir {
-                        for tag in &tx.tags {
+                        for tag in tx.tags {
                             if !tag.is_empty() {
-                                tags.insert(tag.clone());
+                                tags.insert(tag);
                             }
                         }
                     }
                 }
 
-                if tags.is_empty() {
-                    let root = doc.tree.root_node();
-                    let mut stack = vec![root];
-                    while let Some(node) = stack.pop() {
-                        if NodeKind::from(node.kind()) == NodeKind::Tag {
-                            let text = doc
-                                .rope
-                                .byte_slice(node.start_byte()..node.end_byte())
-                                .to_string();
-                            if let Some(stripped) = text.strip_prefix('#')
-                                && !stripped.is_empty()
-                            {
-                                tags.insert(stripped.to_string());
-                            }
-                        }
-
-                        for idx in (0..node.child_count()).rev() {
-                            if let Some(child) = node.child(u32::try_from(idx).unwrap()) {
-                                stack.push(child);
-                            }
-                        }
-                    }
-                }
+                tags.extend(extract_tags_from_text(&doc.content));
             }
 
             tags.into_iter()
@@ -479,7 +423,6 @@ pub fn completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beancount_parser::{core, parse_str};
     use beancount_tree_sitter::{language, tree_sitter};
     use std::collections::HashSet;
     use tower_lsp::lsp_types::{
@@ -511,7 +454,7 @@ mod tests {
         let content = content_lines.join("\n");
 
         let _uri = Url::parse("file:///completion-helper.bean").unwrap();
-        let directives = Vec::new();
+        let directives = parse_core_directives(&content, _uri.as_str());
         let rope = ropey::Rope::from_str(&content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
@@ -545,8 +488,7 @@ mod tests {
     }
 
     fn build_doc(uri: &Url, content: &str) -> Document {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
+        let directives = parse_core_directives(content, uri.as_str());
         let rope = ropey::Rope::from_str(content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
