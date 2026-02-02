@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use beancount_parser::core;
 use beancount_tree_sitter::{NodeKind, tree_sitter};
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
-    Position, Range, TextEdit, Url,
+    Position, Range, TextEdit, Uri as Url,
 };
 
 use crate::server::{Document, find_document};
@@ -482,7 +482,8 @@ mod tests {
     use beancount_parser::{core, parse_str};
     use beancount_tree_sitter::{language, tree_sitter};
     use std::collections::HashSet;
-    use tower_lsp::lsp_types::{
+    use std::str::FromStr;
+    use tower_lsp_server::ls_types::{
         CompletionContext, CompletionTriggerKind, Position, TextDocumentIdentifier,
         TextDocumentPositionParams,
     };
@@ -510,7 +511,7 @@ mod tests {
         let cursor = cursor.expect("cursor marker '|' not found");
         let content = content_lines.join("\n");
 
-        let _uri = Url::parse("file:///completion-helper.bean").unwrap();
+        let _uri = Url::from_str("file:///completion-helper.bean").unwrap();
         let directives = Vec::new();
         let rope = ropey::Rope::from_str(&content);
         let mut parser = tree_sitter::Parser::new();
@@ -561,7 +562,7 @@ mod tests {
 
     #[test]
     fn completes_accounts_and_replaces_prefix() {
-        let uri = Url::parse("file:///main.bean").unwrap();
+        let uri = Url::from_str("file:///main.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n";
         let doc = build_doc(&uri, content);
 
@@ -607,7 +608,7 @@ mod tests {
     fn suppresses_completion_at_document_root() {
         let lines = [r#"a|"#];
         let (doc, position) = doc_with_cursor(&lines);
-        let uri = Url::parse("file:///completion-helper.bean").unwrap();
+        let uri = Url::from_str("file:///completion-helper.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(uri.clone(), doc);
@@ -669,11 +670,11 @@ mod tests {
 
     #[test]
     fn allows_completion_on_balance_directive() {
-        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_uri = Url::from_str("file:///open.bean").unwrap();
         let open_content = "2020-01-01 open Assets:Bank:C1234\n";
         let open_doc = build_doc(&open_uri, open_content);
 
-        let bal_uri = Url::parse("file:///bal.bean").unwrap();
+        let bal_uri = Url::from_str("file:///bal.bean").unwrap();
         let bal_with_cursor = "2020-10-01 balance Assets:Bank:C1234|           0.00 CNY\n";
         let cursor_col = bal_with_cursor.find('|').expect("cursor marker present");
         let bal_content = {
@@ -727,7 +728,7 @@ mod tests {
 
     #[test]
     fn completes_when_cursor_at_account_end() {
-        let uri = Url::parse("file:///main.bean").unwrap();
+        let uri = Url::from_str("file:///main.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n";
         let doc = build_doc(&uri, content);
 
@@ -772,7 +773,7 @@ mod tests {
 
     #[test]
     fn suppresses_completion_outside_account_nodes() {
-        let uri = Url::parse("file:///main.bean").unwrap();
+        let uri = Url::from_str("file:///main.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n2023-01-02 * \"Payee\" \"Narration\"\n";
         let doc = build_doc(&uri, content);
 
@@ -802,7 +803,7 @@ mod tests {
 
     #[test]
     fn suppresses_account_completion_in_amount_field() {
-        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_uri = Url::from_str("file:///open.bean").unwrap();
         let open_content = "2020-01-01 open Assets:Cash\n";
         let open_doc = build_doc(&open_uri, open_content);
 
@@ -812,7 +813,7 @@ mod tests {
             r#"  Assets:Cash                                 1|00 CNY"#,
         ];
         let (tx_doc, position) = doc_with_cursor(&lines);
-        let tx_uri = Url::parse("file:///txn.bean").unwrap();
+        let tx_uri = Url::from_str("file:///txn.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(open_uri.clone(), open_doc);
@@ -842,13 +843,13 @@ mod tests {
 
     #[test]
     fn suppresses_account_completion_after_posting_account() {
-        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_uri = Url::from_str("file:///open.bean").unwrap();
         let open_content = "2020-01-01 open Assets:Cash\n";
         let open_doc = build_doc(&open_uri, open_content);
 
         let lines = [r#"2022-01-02 * "..." "...""#, r#"  Expenses:Food a|"#];
         let (tx_doc, position) = doc_with_cursor(&lines);
-        let tx_uri = Url::parse("file:///txn2.bean").unwrap();
+        let tx_uri = Url::from_str("file:///txn2.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(open_uri.clone(), open_doc);
@@ -886,7 +887,7 @@ mod tests {
             r#"  Expenses:Food"#,
         ];
         let (doc, position) = doc_with_cursor(&lines);
-        let uri = Url::parse("file:///tags.bean").unwrap();
+        let uri = Url::from_str("file:///tags.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(uri.clone(), doc);
@@ -937,7 +938,7 @@ mod tests {
             r#"  Expenses:Food"#,
         ];
         let (doc, position) = doc_with_cursor(&lines);
-        let uri = Url::parse("file:///tags-prefix.bean").unwrap();
+        let uri = Url::from_str("file:///tags-prefix.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(uri.clone(), doc);
@@ -980,14 +981,14 @@ mod tests {
 
     #[test]
     fn completes_tags_from_parsed_directives() {
-        let tag_uri = Url::parse("file:///source-tags.bean").unwrap();
+        let tag_uri = Url::from_str("file:///source-tags.bean").unwrap();
         let tag_content =
             "2024-01-01 * \"p\" \"n\" #groceries #fun\n  Assets:Cash -10 USD\n  Expenses:Food\n";
         let tag_doc = build_doc(&tag_uri, tag_content);
 
         let lines = [r#"2025-01-01 * "p" "n" #|"#, r#"  Expenses:Food"#];
         let (cursor_doc, position) = doc_with_cursor(&lines);
-        let cursor_uri = Url::parse("file:///cursor-tags.bean").unwrap();
+        let cursor_uri = Url::from_str("file:///cursor-tags.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(tag_uri.clone(), tag_doc);
@@ -1035,7 +1036,7 @@ mod tests {
     fn completes_keywords_after_date() {
         let lines = [r#"2026-02-02 |"#];
         let (doc, position) = doc_with_cursor(&lines);
-        let uri = Url::parse("file:///kw.bean").unwrap();
+        let uri = Url::from_str("file:///kw.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(uri.clone(), doc);
@@ -1082,7 +1083,7 @@ mod tests {
     fn completes_root_keywords() {
         let lines = ["|"];
         let (doc, position) = doc_with_cursor(&lines);
-        let uri = Url::parse("file:///root.kw.bean").unwrap();
+        let uri = Url::from_str("file:///root.kw.bean").unwrap();
 
         let mut documents = HashMap::new();
         documents.insert(uri.clone(), doc);
@@ -1129,9 +1130,9 @@ mod tests {
     #[test]
     fn matches_documents_case_insensitively_on_windows() {
         let stored_uri =
-            Url::parse("file:///C:/Users/Trim21/proj/count/logs/2026/01.bean").unwrap();
+            Url::from_str("file:///C:/Users/Trim21/proj/count/logs/2026/01.bean").unwrap();
         let requested_uri =
-            Url::parse("file:///c%3A/Users/Trim21/proj/count/logs/2026/01.bean").unwrap();
+            Url::from_str("file:///c%3A/Users/Trim21/proj/count/logs/2026/01.bean").unwrap();
 
         let content = "2023-01-01 open Assets:Cash\n";
         let doc = build_doc(&stored_uri, content);

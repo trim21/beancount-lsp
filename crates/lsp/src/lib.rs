@@ -9,8 +9,8 @@ mod text;
 
 use clap::{Parser, ValueEnum, error::ErrorKind as ClapErrorKind};
 use server::Backend;
-use tower_lsp::jsonrpc::{Error, Result};
-use tower_lsp::{LspService, Server};
+use tower_lsp_server::jsonrpc::{Error, Result};
+use tower_lsp_server::{LspService, Server};
 use tracing::{Level, info};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -107,8 +107,8 @@ pub fn run_server_blocking(argv: Vec<String>) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|err| tower_lsp::jsonrpc::Error {
-            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+        .map_err(|err| tower_lsp_server::jsonrpc::Error {
+            code: tower_lsp_server::jsonrpc::ErrorCode::InternalError,
             message: format!("failed to start tokio runtime: {err}").into(),
             data: None,
         })?;

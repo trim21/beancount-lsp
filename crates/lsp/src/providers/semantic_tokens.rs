@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use crate::text::byte_to_lsp_position;
 use beancount_tree_sitter::{NodeKind, language, tree_sitter};
 use ropey::Rope;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
     SemanticTokensResult,
 };

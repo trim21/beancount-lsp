@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use beancount_parser::core;
-use tower_lsp::lsp_types::{Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Url};
+use tower_lsp_server::ls_types::{
+    Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Uri as Url,
+};
 
 use crate::providers::account::account_at_position;
 use crate::server::{Document, find_document};
@@ -56,7 +58,10 @@ mod tests {
     use crate::providers::account::account_at_position;
     use beancount_parser::{core, parse_str};
     use beancount_tree_sitter::{language, tree_sitter};
-    use tower_lsp::lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams};
+    use std::str::FromStr;
+    use tower_lsp_server::ls_types::{
+        Position, TextDocumentIdentifier, TextDocumentPositionParams,
+    };
 
     fn build_doc(uri: &Url, content: &str) -> Document {
         let directives =
@@ -75,7 +80,7 @@ mod tests {
 
     #[test]
     fn hover_shows_account_notes() {
-        let uri = Url::parse("file:///hover.bean").unwrap();
+        let uri = Url::from_str("file:///hover.bean").unwrap();
         let content = "2023-01-01 open Assets:Cash\n2023-02-01 note Assets:Cash \"First note\"\n";
         let doc = build_doc(&uri, content);
 

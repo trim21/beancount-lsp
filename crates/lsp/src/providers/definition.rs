@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use beancount_tree_sitter::{NodeKind, tree_sitter};
 use ropey::Rope;
-use tower_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse, Location, Range, Url};
+use tower_lsp_server::ls_types::{
+    GotoDefinitionParams, GotoDefinitionResponse, Location, Range, Uri as Url,
+};
 
 use crate::providers::account::account_at_position;
 use crate::server::{Document, find_document};
@@ -81,7 +83,10 @@ mod tests {
     use super::*;
     use beancount_parser::{core, parse_str};
     use beancount_tree_sitter::{language, tree_sitter};
-    use tower_lsp::lsp_types::{Position, TextDocumentIdentifier, TextDocumentPositionParams};
+    use std::str::FromStr;
+    use tower_lsp_server::ls_types::{
+        Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri as Url,
+    };
 
     fn build_doc(uri: &Url, content: &str) -> Document {
         let directives =
@@ -100,11 +105,11 @@ mod tests {
 
     #[test]
     fn goto_definition_returns_open_locations() {
-        let open_uri = Url::parse("file:///open.bean").unwrap();
+        let open_uri = Url::from_str("file:///open.bean").unwrap();
         let open_content = "2023-01-01 open Assets:Cash\n";
         let open_doc = build_doc(&open_uri, open_content);
 
-        let txn_uri = Url::parse("file:///txn.bean").unwrap();
+        let txn_uri = Url::from_str("file:///txn.bean").unwrap();
         let txn_content = "2023-02-01 txn \"\" \"\"\n  Assets:Cash 1 USD\n";
         let txn_doc = build_doc(&txn_uri, txn_content);
 
