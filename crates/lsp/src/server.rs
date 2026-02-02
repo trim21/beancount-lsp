@@ -142,7 +142,6 @@ enum IndexerCommand {
     Update { uri: Url, text: String },
 }
 
-
 fn checker_diagnostic_to_lsp(diag: CheckerDiagnostic, source: &str) -> Diagnostic {
     let line = diag.lineno.unwrap_or(0);
     let message = match diag.filename.filter(|name| !name.is_empty()) {
@@ -351,9 +350,7 @@ impl Backend {
     }
 
     async fn update_document(&self, uri: Url, text: String) {
-        let _ = self
-            .indexer_tx
-            .send(IndexerCommand::Update { uri, text });
+        let _ = self.indexer_tx.send(IndexerCommand::Update { uri, text });
         if self
             .inner
             .read()
@@ -390,10 +387,11 @@ impl LanguageServer for Backend {
             info!("received initialization config without root_file");
         }
 
-        let root_path = config.root_file.as_ref().map(|path| canonical_or_original(path));
-        let root_uri = root_path
+        let root_path = config
+            .root_file
             .as_ref()
-            .and_then(|path| Url::from_file_path(path));
+            .map(|path| canonical_or_original(path));
+        let root_uri = root_path.as_ref().and_then(Url::from_file_path);
         {
             let mut guard = self.inner.write().await;
             if guard.is_some() {
@@ -411,7 +409,10 @@ impl LanguageServer for Backend {
             let initial_snapshot = Arc::new(indexer.documents().clone());
             let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
 
-            *guard = Some(InnerBackend { snapshot_rx, root_uri });
+            *guard = Some(InnerBackend {
+                snapshot_rx,
+                root_uri,
+            });
 
             if let Some(rx) = self.indexer_rx.lock().await.take() {
                 self.spawn_indexer_worker(indexer, rx, snapshot_tx);
@@ -515,9 +516,7 @@ impl LanguageServer for Backend {
         self.with_inner(|inner| {
             let snapshot = inner.snapshot_rx.borrow().clone();
             match &inner.root_uri {
-                Some(root_uri) => {
-                    completion::completion(snapshot.as_ref(), root_uri, &params)
-                }
+                Some(root_uri) => completion::completion(snapshot.as_ref(), root_uri, &params),
                 None => {
                     let doc = resolve_document_from_snapshot(snapshot.as_ref(), &current_uri)?;
                     let mut docs = HashMap::new();
@@ -530,7 +529,11 @@ impl LanguageServer for Backend {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let current_uri = params.text_document_position_params.text_document.uri.clone();
+        let current_uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
         self.with_inner(|inner| {
             let snapshot = inner.snapshot_rx.borrow().clone();
             match &inner.root_uri {
@@ -550,7 +553,11 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let current_uri = params.text_document_position_params.text_document.uri.clone();
+        let current_uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone();
         self.with_inner(|inner| {
             let snapshot = inner.snapshot_rx.borrow().clone();
             match &inner.root_uri {

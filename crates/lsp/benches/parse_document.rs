@@ -1,27 +1,24 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::OnceLock;
 
-use criterion::{criterion_group, criterion_main, Criterion, BatchSize, black_box};
+use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use tower_lsp_server::ls_types::Uri as Url;
 
 fn generate_sample() -> &'static str {
     static SAMPLE: OnceLock<String> = OnceLock::new();
-    SAMPLE.get_or_init(|| {
-        match Command::new("bean-example").output() {
-            Ok(output) => {
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("bean-example failed, using fallback sample: {stderr}");
-                    return fallback_sample();
-                }
-                String::from_utf8(output.stdout)
-                    .unwrap_or_else(|_| fallback_sample())
+    SAMPLE.get_or_init(|| match Command::new("bean-example").output() {
+        Ok(output) => {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("bean-example failed, using fallback sample: {stderr}");
+                return fallback_sample();
             }
-            Err(err) => {
-                eprintln!("bean-example not available ({err}), using fallback sample");
-                fallback_sample()
-            }
+            String::from_utf8(output.stdout).unwrap_or_else(|_| fallback_sample())
+        }
+        Err(err) => {
+            eprintln!("bean-example not available ({err}), using fallback sample");
+            fallback_sample()
         }
     })
 }
@@ -56,7 +53,10 @@ fn build_tree(sample: &str) -> BenchTree {
     for i in 0..25 {
         let filename = dir.path().join(format!("inc_{i}.bean"));
         std::fs::write(&filename, &sample).expect("write include file");
-        include_lines.push(format!("include \"{}\"", filename.file_name().unwrap().to_string_lossy()));
+        include_lines.push(format!(
+            "include \"{}\"",
+            filename.file_name().unwrap().to_string_lossy()
+        ));
         if i == 0 {
             update_uri = Url::from_file_path(&filename);
         }
@@ -117,7 +117,10 @@ fn bench_update_with_refcount(c: &mut Criterion) {
 fn bench_clone_documents(c: &mut Criterion) {
     let tree = generate_sample_tree();
     let indexer = beancount_lsp::Indexer::from_journal(&tree.root).unwrap();
-    assert!(!indexer.documents().is_empty(), "expected non-empty documents");
+    assert!(
+        !indexer.documents().is_empty(),
+        "expected non-empty documents"
+    );
     c.bench_function("clone_documents", |b| {
         b.iter(|| {
             black_box(indexer.documents().clone());

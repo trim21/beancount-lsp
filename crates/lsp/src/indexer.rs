@@ -54,6 +54,12 @@ struct CacheEntry {
     doc: Document,
 }
 
+impl Default for Indexer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Indexer {
     const FILE_CACHE_CAPACITY: usize = 512;
 
@@ -255,10 +261,10 @@ impl Indexer {
         let mut missing_paths = Vec::new();
         for child in &added {
             self.increment_ref(child);
-            if !self.documents.contains_key(child) {
-                if let Some(path) = child.to_file_path() {
-                    missing_paths.push(path.into_owned());
-                }
+            if !self.documents.contains_key(child)
+                && let Some(path) = child.to_file_path()
+            {
+                missing_paths.push(path.into_owned());
             }
         }
 
@@ -537,48 +543,45 @@ impl Indexer {
 
         let mut includes = Vec::new();
         for directive in &directives {
-            match directive {
-                core::CoreDirective::Include(include) => {
-                    let resolved = Self::resolve_include_path(&base_path, &include.filename);
-                    let resolved_str = resolved.to_string_lossy();
-                    if let Some(pattern) = Self::glob_pattern_if_any(&resolved_str) {
-                        match glob(&pattern) {
-                            Ok(entries) => {
-                                for entry in entries {
-                                    match entry {
-                                        Ok(entry) => {
-                                            if entry.is_file() {
-                                                includes.push(entry.to_string_lossy().to_string());
-                                            }
+            if let core::CoreDirective::Include(include) = directive {
+                let resolved = Self::resolve_include_path(base_path, &include.filename);
+                let resolved_str = resolved.to_string_lossy();
+                if let Some(pattern) = Self::glob_pattern_if_any(&resolved_str) {
+                    match glob(&pattern) {
+                        Ok(entries) => {
+                            for entry in entries {
+                                match entry {
+                                    Ok(entry) => {
+                                        if entry.is_file() {
+                                            includes.push(entry.to_string_lossy().to_string());
                                         }
-                                        Err(err) => {
-                                            tracing::warn!(
-                                                base_file = %base_path.display(),
-                                                include = %include.filename,
-                                                pattern = %pattern,
-                                                error = %err,
-                                                "failed to expand include glob entry"
-                                            );
-                                        }
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            base_file = %base_path.display(),
+                                            include = %include.filename,
+                                            pattern = %pattern,
+                                            error = %err,
+                                            "failed to expand include glob entry"
+                                        );
                                     }
                                 }
                             }
-                            Err(err) => {
-                                tracing::warn!(
-                                    base_file = %base_path.display(),
-                                    include = %include.filename,
-                                    pattern = %pattern,
-                                    error = %err,
-                                    "failed to expand include glob"
-                                );
-                            }
                         }
-                        continue;
+                        Err(err) => {
+                            tracing::warn!(
+                                base_file = %base_path.display(),
+                                include = %include.filename,
+                                pattern = %pattern,
+                                error = %err,
+                                "failed to expand include glob"
+                            );
+                        }
                     }
-
-                    includes.push(resolved_str.to_string());
+                    continue;
                 }
-                _ => {}
+
+                includes.push(resolved_str.to_string());
             }
         }
 
@@ -610,11 +613,7 @@ mod tests {
         let b_path = dir.path().join("b.bean");
         let c_path = dir.path().join("c.bean");
 
-        fs::write(
-            &root_path,
-            "include \"a.bean\"\ninclude \"b.bean\"\n",
-        )
-        .expect("write root");
+        fs::write(&root_path, "include \"a.bean\"\ninclude \"b.bean\"\n").expect("write root");
         fs::write(&a_path, "include \"c.bean\"\n").expect("write a");
         fs::write(&b_path, "").expect("write b");
         fs::write(&c_path, "").expect("write c");
