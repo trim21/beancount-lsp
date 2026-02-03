@@ -10,8 +10,10 @@ use tower_lsp_server::ls_types::{
 use crate::server::{Document, documents_bfs, find_document};
 use crate::text::{byte_to_lsp_position, lsp_position_to_byte, lsp_position_to_ts_point};
 
-const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note"];
-const ROOT_KEYWORDS: &[&str] = &["include", "option"];
+const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note", "price"];
+const ROOT_KEYWORDS: &[&str] = &[
+    "include", "option", "pushtag", "poptag", "pushmeta", "popmeta",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompletionMode {
@@ -1167,7 +1169,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &uri, &params);
+        let response = completion(&documents, &stored_uri, &params);
         assert!(
             response.is_some(),
             "expected completion despite URI casing differences"

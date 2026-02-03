@@ -52,7 +52,7 @@ fn build_tree(sample: &str) -> BenchTree {
 
     for i in 0..25 {
         let filename = dir.path().join(format!("inc_{i}.bean"));
-        std::fs::write(&filename, &sample).expect("write include file");
+        std::fs::write(&filename, sample).expect("write include file");
         include_lines.push(format!(
             "include \"{}\"",
             filename.file_name().unwrap().to_string_lossy()
@@ -63,7 +63,7 @@ fn build_tree(sample: &str) -> BenchTree {
     }
 
     let nested = nested_dir.join("nested.bean");
-    std::fs::write(&nested, &sample).expect("write nested file");
+    std::fs::write(&nested, sample).expect("write nested file");
     include_lines.push("include \"nested/nested.bean\"".to_string());
 
     let root_content = format!("{}\n{}", include_lines.join("\n"), sample);
@@ -87,7 +87,7 @@ fn bench_parse_document(c: &mut Criterion) {
 
     c.bench_function("parse_document", |b| {
         b.iter(|| {
-            beancount_lsp::parse_document_for_bench(black_box(&sample), &filename);
+            beancount_lsp::parse_document_for_bench(black_box(sample), &filename);
         })
     });
 }

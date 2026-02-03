@@ -637,6 +637,6 @@ mod tests {
         assert!(indexer.documents.contains_key(&a_uri));
         assert!(indexer.documents.contains_key(&c_uri));
         assert!(!indexer.documents.contains_key(&b_uri));
-        assert!(indexer.ref_counts.get(&b_uri).is_none());
+        assert!(!indexer.ref_counts.contains_key(&b_uri));
     }
 }
