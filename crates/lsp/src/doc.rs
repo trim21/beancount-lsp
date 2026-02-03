@@ -59,14 +59,16 @@ pub(crate) fn build_document(text: &str, filename: &str) -> Option<Document> {
     let content = Pin::new(text.to_owned());
 
     let ast = parse_str(&content, filename).unwrap_or_default();
+    let rope = Rope::from_str(text);
 
-    let directives = core::normalize_directives(&ast).ok().unwrap_or_default();
+    let directives = core::normalize_directives_with_rope(&ast, filename, &rope)
+        .ok()
+        .unwrap_or_default();
 
     let ast = unsafe {
         std::mem::transmute::<Vec<ast::Directive<'_>>, Vec<ast::Directive<'static>>>(ast)
     };
 
-    let rope = Rope::from_str(text);
     Some(Document {
         content,
         ast,

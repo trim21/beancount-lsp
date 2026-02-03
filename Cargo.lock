@@ -158,12 +158,13 @@ dependencies = [
 [[package]]
 name = "beancount-parser"
 version = "3.3.0-alpha.0"
-source = "git+https://github.com/trim21/beancount.git?rev=0ea26bac#0ea26baccde2d239a7d39a7136a78cb6cff7f3a4"
+source = "git+https://github.com/trim21/beancount.git?rev=b2e00169#b2e001698fb094c74c380c1a65d328c712c74c1c"
 dependencies = [
  "anyhow",
  "chrono",
  "chumsky",
  "path-clean",
+ "ropey",
  "rust_decimal",
  "serde_json",
  "smallvec",
