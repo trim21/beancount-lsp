@@ -107,13 +107,7 @@ impl Document {
 ///
 /// This keeps the backing string pinned and stores an AST that borrows from it.
 pub fn build_document(text: String, filename: &str) -> Option<Document> {
-    let (ast, rope) = match parse_str_with_rope(&text) {
-        Ok(v) => v,
-        Err(err) => {
-            tracing::warn!("failed to parse {}: err: {}", filename, err);
-            return None;
-        }
-    };
+    let (ast, rope) = parse_str_with_rope(&text);
 
     let directives = core::normalize_directives_with_rope(&ast, filename, &rope)
         .ok()

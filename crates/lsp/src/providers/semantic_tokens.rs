@@ -670,8 +670,9 @@ popmeta foo:
 
     #[test]
     fn semantic_tokens_snapshot() {
-        let doc =
-            crate::doc::build_document(SAMPLE.to_owned(), "snapshot.bean").expect("build document");
+        beancount_parser::parse_str_with_rope(SAMPLE);
+
+        let doc = crate::doc::build_document(SAMPLE.to_owned(), "snapshot.bean").unwrap();
 
         let result = semantic_tokens_full(&doc).expect("tokens");
 

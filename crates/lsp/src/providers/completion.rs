@@ -142,9 +142,11 @@ fn tag_prefix_at_position(doc: &Document, position: Position) -> Option<(String,
 
 fn is_within_account_context(doc: &Document, byte_idx: usize) -> bool {
     let span_contains = |span: ast::Span| span.start <= byte_idx && byte_idx <= span.end;
-    let directive = doc
-        .directive_at_offset(byte_idx)
-        .or_else(|| byte_idx.checked_sub(1).and_then(|idx| doc.directive_at_offset(idx)));
+    let directive = doc.directive_at_offset(byte_idx).or_else(|| {
+        byte_idx
+            .checked_sub(1)
+            .and_then(|idx| doc.directive_at_offset(idx))
+    });
 
     let directive = match directive {
         Some(d) => d,
@@ -747,6 +749,8 @@ mod tests {
         let open_uri = Url::from_str("file:///open.bean").unwrap();
         let open_content = "2020-01-01 open Assets:Cash\n";
         let open_doc = build_doc(&open_uri, open_content);
+
+        assert!(matches!(open_doc.ast()[0], ast::Directive::Open(_)));
 
         let lines = [r#"2022-01-02 * "..." "...""#, r#"  Expenses:Food a|"#];
         let (tx_doc, position) = doc_with_cursor(&lines);
