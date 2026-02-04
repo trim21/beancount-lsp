@@ -7,6 +7,7 @@ use tower_lsp_server::ls_types::{
     Position, Range, TextEdit, Uri as Url,
 };
 
+use crate::providers::account::account_at_position;
 use crate::server::{Document, documents_bfs, find_document};
 use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
@@ -140,20 +141,34 @@ fn tag_prefix_at_position(doc: &Document, position: Position) -> Option<(String,
 }
 
 fn is_within_account_context(doc: &Document, byte_idx: usize) -> bool {
-    let directive = match doc.directive_at_offset(byte_idx) {
+    let span_contains = |span: ast::Span| span.start <= byte_idx && byte_idx <= span.end;
+    let directive = doc
+        .directive_at_offset(byte_idx)
+        .or_else(|| byte_idx.checked_sub(1).and_then(|idx| doc.directive_at_offset(idx)));
+
+    let directive = match directive {
         Some(d) => d,
         None => return false,
     };
 
     match directive {
-        ast::Directive::Open(_)
-        | ast::Directive::Balance(_)
-        | ast::Directive::Pad(_)
-        | ast::Directive::Close(_) => true,
-        ast::Directive::Transaction(tx) => tx
-            .postings
-            .iter()
-            .any(|p| p.span.start <= byte_idx && byte_idx < p.span.end),
+        ast::Directive::Open(open) => span_contains(open.account.span),
+        ast::Directive::Balance(balance) => span_contains(balance.account.span),
+        ast::Directive::Pad(pad) => {
+            span_contains(pad.account.span) || span_contains(pad.from_account.span)
+        }
+        ast::Directive::Close(close) => span_contains(close.account.span),
+        ast::Directive::Transaction(tx) => {
+            tx.postings.iter().any(|p| span_contains(p.account.span))
+        }
+        ast::Directive::Raw(_) => {
+            let Some(position) = byte_to_lsp_position(&doc.rope, byte_idx) else {
+                return false;
+            };
+
+            // Try the account finder, which includes a text fallback for partial raw content.
+            account_at_position(doc, position).is_some()
+        }
         _ => false,
     }
 }
@@ -218,21 +233,7 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
         return Some(CompletionMode::Tag { prefix, range });
     }
 
-    let mut allow_account = in_account_context;
-
-    // Fallback heuristic: indented posting line or account-taking directives (open/balance).
-    if !allow_account {
-        allow_account = if indent > 0 {
-            true
-        } else {
-            let mut parts = trimmed.split_whitespace();
-            let first = parts.next();
-            let second = parts.next();
-            first.is_some() && matches!(second, Some("open") | Some("balance"))
-        };
-    }
-
-    if allow_account
+    if in_account_context
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, false)
     {
         // Avoid treating amount/price fields as accounts; require token to start alphabetic.
