@@ -36,12 +36,12 @@ fn url_normalized_key(url: &Url) -> Option<String> {
 }
 
 /// Find a document by URI, tolerating platform-specific path casing/format differences.
-pub(crate) fn find_document<'a>(
-    documents: &'a HashMap<Url, Document>,
+pub(crate) fn find_document(
+    documents: &HashMap<Url, Arc<Document>>,
     uri: &Url,
-) -> Option<&'a Document> {
+) -> Option<Arc<Document>> {
     if let Some(doc) = documents.get(uri) {
-        return Some(doc);
+        return Some(Arc::clone(doc));
     }
 
     let target = url_normalized_key(uri)?;
@@ -49,14 +49,14 @@ pub(crate) fn find_document<'a>(
     documents.iter().find_map(|(key, doc)| {
         url_normalized_key(key)
             .filter(|candidate| candidate == &target)
-            .map(|_| doc)
+            .map(|_| Arc::clone(doc))
     })
 }
 
-pub(crate) fn documents_bfs<'a>(
-    documents: &'a HashMap<Url, Document>,
+pub(crate) fn documents_bfs(
+    documents: &HashMap<Url, Arc<Document>>,
     root: &Url,
-) -> Vec<(Url, &'a Document)> {
+) -> Vec<(Url, Arc<Document>)> {
     let mut ordered = Vec::new();
     let mut queue: VecDeque<Url> = VecDeque::new();
     let mut visited: HashSet<String> = HashSet::new();
@@ -74,7 +74,7 @@ pub(crate) fn documents_bfs<'a>(
         let Some(doc) = documents.get(&uri) else {
             continue;
         };
-        ordered.push((uri.clone(), doc));
+        ordered.push((uri.clone(), Arc::clone(doc)));
 
         for include in &doc.includes {
             let path = Path::new(include);
@@ -95,19 +95,18 @@ pub(crate) fn documents_bfs<'a>(
 }
 
 fn resolve_document_from_snapshot(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, Arc<Document>>,
     uri: &Url,
-) -> Option<Document> {
+) -> Option<Arc<Document>> {
     if let Some(doc) = find_document(documents, uri) {
-        return Some(doc.clone());
+        return Some(doc);
     }
 
     let path = uri.to_file_path()?;
     let content = fs::read_to_string(path.as_ref()).ok()?;
-    Indexer::parse_document(&content, path.as_ref())
+    Indexer::parse_document(&content, path.as_ref()).map(Arc::new)
 }
 
-#[derive(Clone)]
 pub struct Document {
     pub directives: Vec<core::CoreDirective>,
     pub includes: Vec<String>,
@@ -129,7 +128,7 @@ pub struct Backend {
 }
 
 struct InnerBackend {
-    snapshot_rx: watch::Receiver<Arc<HashMap<Url, Document>>>,
+    snapshot_rx: watch::Receiver<Arc<HashMap<Url, Arc<Document>>>>,
     root_uri: Option<Url>,
 }
 
@@ -226,7 +225,7 @@ impl Backend {
         &self,
         mut indexer: Indexer,
         mut rx: mpsc::UnboundedReceiver<IndexerCommand>,
-        snapshot_tx: watch::Sender<Arc<HashMap<Url, Document>>>,
+        snapshot_tx: watch::Sender<Arc<HashMap<Url, Arc<Document>>>>,
     ) {
         tokio::spawn(async move {
             let mut pending: HashMap<Url, String> = HashMap::new();

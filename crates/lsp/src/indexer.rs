@@ -3,6 +3,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use std::sync::Arc;
 
 use anyhow::{Result as AnyResult, anyhow};
 use beancount_parser::{core, parse};
@@ -39,7 +40,7 @@ pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
 }
 
 pub struct Indexer {
-    documents: HashMap<Url, Document>,
+    documents: HashMap<Url, Arc<Document>>,
     include_edges: HashMap<Url, HashSet<Url>>,
     ref_counts: HashMap<Url, usize>,
     root: Option<Url>,
@@ -51,7 +52,7 @@ pub struct Indexer {
 struct CacheEntry {
     size: u64,
     mtime: Option<SystemTime>,
-    doc: Document,
+    doc: Arc<Document>,
 }
 
 impl Default for Indexer {
@@ -82,7 +83,7 @@ impl Indexer {
         Ok(indexer)
     }
 
-    pub fn documents(&self) -> &HashMap<Url, Document> {
+    pub fn documents(&self) -> &HashMap<Url, Arc<Document>> {
         &self.documents
     }
 
@@ -218,6 +219,7 @@ impl Indexer {
         let Some(doc) = Self::parse_document(&text, &base_path) else {
             return false;
         };
+        let doc = Arc::new(doc);
 
         let target_key = Self::url_normalized_key(&uri);
         let mut previous: Option<Vec<String>> = None;
@@ -241,8 +243,8 @@ impl Indexer {
             }
         }
 
-        let new_includes = self.collect_include_uris(&doc);
-        self.documents.insert(uri.clone(), doc.clone());
+        let new_includes = self.collect_include_uris(doc.as_ref());
+        self.documents.insert(uri.clone(), Arc::clone(&doc));
         self.include_edges.insert(uri.clone(), new_includes.clone());
 
         let removed = previous_includes
@@ -280,9 +282,9 @@ impl Indexer {
         true
     }
 
-    fn insert_document(&mut self, uri: Url, doc: Document) {
-        let includes = self.collect_include_uris(&doc);
-        self.documents.insert(uri.clone(), doc);
+    fn insert_document(&mut self, uri: Url, doc: Arc<Document>) {
+        let includes = self.collect_include_uris(doc.as_ref());
+        self.documents.insert(uri.clone(), Arc::clone(&doc));
         self.include_edges.insert(uri.clone(), includes.clone());
 
         for child in includes {
@@ -339,11 +341,11 @@ impl Indexer {
         }
     }
 
-    fn load_missing_from_paths(&mut self, paths: &[PathBuf]) -> Vec<(Url, Document)> {
+    fn load_missing_from_paths(&mut self, paths: &[PathBuf]) -> Vec<(Url, Arc<Document>)> {
         let mut queue: VecDeque<PathBuf> = paths.iter().cloned().collect();
         let mut queued: HashSet<String> = HashSet::new();
         let mut visited: HashSet<String> = HashSet::new();
-        let mut new_docs: Vec<(Url, Document)> = Vec::new();
+        let mut new_docs: Vec<(Url, Arc<Document>)> = Vec::new();
 
         for path in paths {
             queued.insert(Self::normalized_path_key(path));
@@ -399,7 +401,7 @@ impl Indexer {
         new_docs
     }
 
-    fn load_document_from_path(&mut self, path: &Path) -> Option<Document> {
+    fn load_document_from_path(&mut self, path: &Path) -> Option<Arc<Document>> {
         let canonical = canonical_or_original(path);
         let key = Self::normalized_path_key(&canonical);
 
@@ -416,7 +418,7 @@ impl Indexer {
 
         if let Some(entry) = self.file_cache.get(&key) {
             if entry.size == size && entry.mtime == mtime {
-                return Some(entry.doc.clone());
+                return Some(Arc::clone(&entry.doc));
             }
             self.file_cache.pop(&key);
         }
@@ -430,7 +432,7 @@ impl Indexer {
         };
 
         let doc = match Self::parse_document(&content, &canonical) {
-            Some(doc) => doc,
+            Some(doc) => Arc::new(doc),
             None => {
                 tracing::warn!(file = %canonical.display(), "failed to parse beancount file");
                 return None;
@@ -442,7 +444,7 @@ impl Indexer {
             CacheEntry {
                 size,
                 mtime,
-                doc: doc.clone(),
+                doc: Arc::clone(&doc),
             },
         );
 

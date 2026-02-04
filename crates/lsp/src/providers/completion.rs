@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use beancount_parser::core;
 use beancount_tree_sitter::{NodeKind, tree_sitter};
@@ -351,7 +352,7 @@ fn fuzzy_match(candidate: &str, prefix: &str) -> bool {
 }
 
 pub fn completion(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, Arc<Document>>,
     root_uri: &Url,
     params: &CompletionParams,
 ) -> Option<CompletionResponse> {
@@ -359,7 +360,7 @@ pub fn completion(
     let position = params.text_document_position.position;
     let doc = find_document(documents, uri)?;
 
-    let ctx = match determine_completion_context(doc, position) {
+    let ctx = match determine_completion_context(doc.as_ref(), position) {
         Some(ctx) => ctx,
         None => {
             return None;
@@ -492,7 +493,7 @@ mod tests {
     };
 
     /// Build a document and cursor position from lines containing a single `|` marker.
-    fn doc_with_cursor(lines: &[&str]) -> (Document, Position) {
+    fn doc_with_cursor(lines: &[&str]) -> (Arc<Document>, Position) {
         let mut content_lines = Vec::new();
         let mut cursor: Option<Position> = None;
 
@@ -523,20 +524,20 @@ mod tests {
         let tree = parser.parse(&content, None).unwrap();
 
         (
-            Document {
+            Arc::new(Document {
                 directives,
                 includes,
                 content,
                 rope,
                 tree,
-            },
+            }),
             cursor,
         )
     }
 
     fn determine_context_helper(lines: &[&str]) -> Option<CompletionMode> {
         let (doc, pos) = doc_with_cursor(lines);
-        determine_completion_context(&doc, pos)
+        determine_completion_context(doc.as_ref(), pos)
     }
 
     fn assert_account_range(lines: &[&str], start: Position, end: Position) {
@@ -550,7 +551,7 @@ mod tests {
         }
     }
 
-    fn build_doc(uri: &Url, content: &str) -> Document {
+    fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
         let directives =
             core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
         let includes = directives
@@ -564,13 +565,13 @@ mod tests {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(content, None).unwrap();
-        Document {
+        Arc::new(Document {
             directives,
             includes,
             content: content.to_owned(),
             rope,
             tree,
-        }
+        })
     }
 
     #[test]

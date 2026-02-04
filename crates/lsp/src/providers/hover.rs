@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use beancount_parser::core;
 use tower_lsp_server::ls_types::{
@@ -9,7 +10,7 @@ use crate::providers::account::account_at_position;
 use crate::server::{Document, documents_bfs, find_document};
 
 fn notes_for_account(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, Arc<Document>>,
     root_uri: &Url,
     account: &str,
 ) -> Vec<String> {
@@ -29,14 +30,14 @@ fn notes_for_account(
 }
 
 pub fn hover(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, Arc<Document>>,
     root_uri: &Url,
     params: &HoverParams,
 ) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
     let (account, account_range) =
-        find_document(documents, uri).and_then(|doc| account_at_position(doc, position))?;
+        find_document(documents, uri).and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
     let notes = notes_for_account(documents, root_uri, &account);
     if notes.is_empty() {
@@ -71,7 +72,7 @@ mod tests {
         Position, TextDocumentIdentifier, TextDocumentPositionParams,
     };
 
-    fn build_doc(uri: &Url, content: &str) -> Document {
+    fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
         let directives =
             core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
         let includes = directives
@@ -85,13 +86,13 @@ mod tests {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(content, None).unwrap();
-        Document {
+        Arc::new(Document {
             directives,
             includes,
             content: content.to_owned(),
             rope,
             tree,
-        }
+        })
     }
 
     #[test]
@@ -105,7 +106,7 @@ mod tests {
 
         let cursor = Position::new(1, 20);
 
-        let hit = account_at_position(docs.get(&uri).unwrap(), cursor);
+        let hit = account_at_position(docs.get(&uri).unwrap().as_ref(), cursor);
         assert!(hit.is_some(), "expected account under cursor");
 
         let notes = notes_for_account(&docs, &uri, "Assets:Cash");

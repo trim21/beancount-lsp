@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use beancount_tree_sitter::{NodeKind, tree_sitter};
 use ropey::Rope;
@@ -57,19 +58,19 @@ fn collect_nodes(
 }
 
 pub fn goto_definition(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, Arc<Document>>,
     root_uri: &Url,
     params: &GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
 
-    let (account, _) =
-        find_document(documents, uri).and_then(|doc| account_at_position(doc, position))?;
+    let (account, _) = find_document(documents, uri)
+        .and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
     let mut locations = Vec::new();
     for (doc_uri, doc) in documents_bfs(documents, root_uri) {
-        collect_open_definitions(doc, &doc_uri, &account, &mut locations);
+        collect_open_definitions(doc.as_ref(), &doc_uri, &account, &mut locations);
     }
 
     if locations.is_empty() {
@@ -89,7 +90,7 @@ mod tests {
         Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri as Url,
     };
 
-    fn build_doc(uri: &Url, content: &str) -> Document {
+    fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
         let directives =
             core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
         let includes = directives
@@ -103,13 +104,13 @@ mod tests {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(content, None).unwrap();
-        Document {
+        Arc::new(Document {
             directives,
             includes,
             content: content.to_owned(),
             rope,
             tree,
-        }
+        })
     }
 
     #[test]

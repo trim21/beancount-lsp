@@ -8,6 +8,7 @@ pub use crate::indexer::Indexer;
 mod providers;
 mod server;
 mod text;
+mod doc;
 
 use clap::{Parser, ValueEnum, error::ErrorKind as ClapErrorKind};
 use server::Backend;
