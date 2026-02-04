@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 fn generate_sample() -> &'static str {
     static SAMPLE: OnceLock<String> = OnceLock::new();

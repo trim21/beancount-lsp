@@ -149,17 +149,12 @@ pub fn parse_document_for_bench(text: &str, filename: &std::path::Path) {
 pub struct BenchDoc(crate::doc::Document);
 
 impl BenchDoc {
-    pub fn semantic_tokens_full(
-        &self,
-    ) -> Option<tower_lsp_server::ls_types::SemanticTokensResult> {
+    pub fn semantic_tokens_full(&self) -> Option<tower_lsp_server::ls_types::SemanticTokensResult> {
         crate::providers::semantic_tokens::semantic_tokens_full(&self.0)
     }
 }
 
-pub fn build_semantic_tokens_bench_doc(
-    text: &str,
-    filename: &std::path::Path,
-) -> Option<BenchDoc> {
+pub fn build_semantic_tokens_bench_doc(text: &str, filename: &std::path::Path) -> Option<BenchDoc> {
     let doc = crate::indexer::Indexer::parse_document(text, filename)?;
     Some(BenchDoc(doc))
 }
