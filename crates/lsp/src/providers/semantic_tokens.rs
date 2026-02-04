@@ -131,7 +131,11 @@ pub fn semantic_tokens_full(doc: &crate::doc::Document) -> Option<SemanticTokens
     }))
 }
 
-fn collect_directive_tokens(directive: &ast::Directive<'_>, content: &Rope, out: &mut Vec<RawToken>) {
+fn collect_directive_tokens(
+    directive: &ast::Directive<'_>,
+    content: &Rope,
+    out: &mut Vec<RawToken>,
+) {
     match directive {
         ast::Directive::Open(open) => {
             push_span(content, open.keyword, TokenKind::Function, out);
@@ -357,7 +361,11 @@ fn collect_amount(content: &Rope, amount: &ast::Amount<'_>, out: &mut Vec<RawTok
     push_opt_with_span(content, &amount.currency, TokenKind::Class, out);
 }
 
-fn collect_custom_value_tokens(content: &Rope, value: &ast::CustomValue<'_>, out: &mut Vec<RawToken>) {
+fn collect_custom_value_tokens(
+    content: &Rope,
+    value: &ast::CustomValue<'_>,
+    out: &mut Vec<RawToken>,
+) {
     match value.kind {
         ast::CustomValueKind::String => push_with_span(content, &value.raw, TokenKind::String, out),
         ast::CustomValueKind::Date => push_with_span(content, &value.raw, TokenKind::Number, out),
@@ -392,9 +400,9 @@ fn collect_key_value_value_tokens(
     out: &mut Vec<RawToken>,
 ) {
     match &value.content {
-        ast::KeyValueValue::String(_) | ast::KeyValueValue::UnquotedString(_) | ast::KeyValueValue::Raw(_) => {
-            push_with_span(content, value, TokenKind::String, out)
-        }
+        ast::KeyValueValue::String(_)
+        | ast::KeyValueValue::UnquotedString(_)
+        | ast::KeyValueValue::Raw(_) => push_with_span(content, value, TokenKind::String, out),
         ast::KeyValueValue::Date(_) => push_with_span(content, value, TokenKind::Number, out),
         ast::KeyValueValue::Bool(_) => push_with_span(content, value, TokenKind::Keyword, out),
     }
@@ -404,7 +412,9 @@ fn collect_number_expr(content: &Rope, expr: &ast::NumberExpr<'_>, out: &mut Vec
     match expr {
         ast::NumberExpr::Missing { .. } => {}
         ast::NumberExpr::Literal(value) => push_number_literal(content, value, out),
-        ast::NumberExpr::Binary { left, op, right, .. } => {
+        ast::NumberExpr::Binary {
+            left, op, right, ..
+        } => {
             collect_number_expr(content, left, out);
             push_with_span(content, op, TokenKind::Operator, out);
             collect_number_expr(content, right, out);
@@ -415,19 +425,20 @@ fn collect_number_expr(content: &Rope, expr: &ast::NumberExpr<'_>, out: &mut Vec
 fn push_number_literal(content: &Rope, literal: &ast::WithSpan<&str>, out: &mut Vec<RawToken>) {
     let text = literal.content;
 
-    if let Some(first) = text.chars().next() {
-        if (first == '-' || first == '+') && text.len() > first.len_utf8() {
-            let op_start = literal.span.start;
-            let op_end = op_start + first.len_utf8();
-            push_span_range(content, op_start, op_end, TokenKind::Operator, out);
+    if let Some(first) = text.chars().next()
+        && (first == '-' || first == '+')
+        && text.len() > first.len_utf8()
+    {
+        let op_start = literal.span.start;
+        let op_end = op_start + first.len_utf8();
+        push_span_range(content, op_start, op_end, TokenKind::Operator, out);
 
-            let num_start = op_end;
-            if num_start < literal.span.end {
-                push_span_range(content, num_start, literal.span.end, TokenKind::Number, out);
-            }
-
-            return;
+        let num_start = op_end;
+        if num_start < literal.span.end {
+            push_span_range(content, num_start, literal.span.end, TokenKind::Number, out);
         }
+
+        return;
     }
 
     push_with_span(content, literal, TokenKind::Number, out);
@@ -513,13 +524,24 @@ fn push_span(content: &Rope, span: ast::Span, kind: TokenKind, out: &mut Vec<Raw
     }
 }
 
-fn push_span_range(content: &Rope, start: usize, end: usize, kind: TokenKind, out: &mut Vec<RawToken>) {
+fn push_span_range(
+    content: &Rope,
+    start: usize,
+    end: usize,
+    kind: TokenKind,
+    out: &mut Vec<RawToken>,
+) {
     if let Some(token) = to_semantic_token(content, start, end, kind) {
         out.push(token);
     }
 }
 
-fn push_with_span<T>(content: &Rope, value: &ast::WithSpan<T>, kind: TokenKind, out: &mut Vec<RawToken>) {
+fn push_with_span<T>(
+    content: &Rope,
+    value: &ast::WithSpan<T>,
+    kind: TokenKind,
+    out: &mut Vec<RawToken>,
+) {
     push_span(content, value.span, kind, out);
 }
 
@@ -534,7 +556,12 @@ fn push_opt_with_span<T>(
     }
 }
 
-fn to_semantic_token(content: &Rope, start_byte: usize, end_byte: usize, kind: TokenKind) -> Option<RawToken> {
+fn to_semantic_token(
+    content: &Rope,
+    start_byte: usize,
+    end_byte: usize,
+    kind: TokenKind,
+) -> Option<RawToken> {
     if start_byte >= end_byte {
         return None;
     }
@@ -647,8 +674,8 @@ popmeta foo:
 
     #[test]
     fn semantic_tokens_snapshot() {
-        let doc = crate::doc::build_document(SAMPLE.to_owned(), "snapshot.bean")
-            .expect("build document");
+        let doc =
+            crate::doc::build_document(SAMPLE.to_owned(), "snapshot.bean").expect("build document");
 
         let result = semantic_tokens_full(&doc).expect("tokens");
 
