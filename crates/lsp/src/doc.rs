@@ -106,7 +106,7 @@ impl Document {
 /// Build a document from input text and filename.
 ///
 /// This keeps the backing string pinned and stores an AST that borrows from it.
-pub(crate) fn build_document(text: String, filename: &str) -> Option<Document> {
+pub fn build_document(text: String, filename: &str) -> Option<Document> {
     let (ast, rope) = match parse_str_with_rope(&text) {
         Ok(v) => v,
         Err(err) => {

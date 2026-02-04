@@ -6,7 +6,9 @@ mod checkers;
 mod indexer;
 pub use crate::indexer::Indexer;
 mod doc;
+pub use crate::doc::{Document, build_document};
 mod providers;
+pub use crate::providers::account::account_at_position;
 mod server;
 mod text;
 
