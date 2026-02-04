@@ -590,7 +590,7 @@ impl LanguageServer for Backend {
 
 #[cfg(test)]
 mod tests {
-    use crate::indexer::Indexer;
+    use crate::indexer::{Indexer, canonical_or_original};
     use std::fs;
     use std::path::Path;
     use tower_lsp_server::ls_types::Uri as Url;
@@ -648,7 +648,7 @@ include "common.bean"
             &nested2,
         ];
         for p in expected_paths {
-            let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+            let p = canonical_or_original(p);
             let uri = Url::from_file_path(&p).unwrap();
             assert!(docs.contains_key(&uri), "missing document: {}", p.display());
         }
