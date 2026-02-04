@@ -3,7 +3,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Result as AnyResult, anyhow};
 use glob::glob;
@@ -42,7 +42,7 @@ pub struct Indexer {
     ref_counts: HashMap<Url, usize>,
     root: Option<Url>,
     file_cache: LruCache<String, CacheEntry>,
-    updates_since_gc: usize,
+    last_gc: Instant,
 }
 
 #[derive(Clone)]
@@ -70,7 +70,7 @@ impl Indexer {
             file_cache: LruCache::new(
                 NonZeroUsize::new(Self::FILE_CACHE_CAPACITY).expect("file cache capacity"),
             ),
-            updates_since_gc: 0,
+            last_gc: Instant::now(),
         }
     }
 
@@ -503,13 +503,13 @@ impl Indexer {
     }
 
     fn maybe_run_gc(&mut self) {
-        self.updates_since_gc = self.updates_since_gc.saturating_add(1);
-        if self.updates_since_gc < 1024 {
+        let elapsed = self.last_gc.elapsed();
+        if elapsed < Duration::from_secs(600) {
             return;
         }
 
         self.run_gc();
-        self.updates_since_gc = 0;
+        self.last_gc = Instant::now();
     }
 
     fn url_normalized_key(url: &Url) -> Option<String> {
