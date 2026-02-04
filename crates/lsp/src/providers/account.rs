@@ -73,9 +73,11 @@ pub fn account_at_position(doc: &Document, position: Position) -> Option<(String
         Some(Range { start, end })
     };
 
-    let directive = doc
-        .directive_at_offset(byte_idx)
-        .or_else(|| byte_idx.checked_sub(1).and_then(|idx| doc.directive_at_offset(idx)))?;
+    let directive = doc.directive_at_offset(byte_idx).or_else(|| {
+        byte_idx
+            .checked_sub(1)
+            .and_then(|idx| doc.directive_at_offset(idx))
+    })?;
 
     match directive {
         ast::Directive::Open(open) => span_contains(open.account.span, byte_idx)
@@ -92,8 +94,7 @@ pub fn account_at_position(doc: &Document, position: Position) -> Option<(String
             .map(|range| (balance.account.content.to_string(), range)),
         ast::Directive::Pad(pad) => {
             if span_contains(pad.account.span, byte_idx) {
-                to_range(pad.account.span)
-                    .map(|range| (pad.account.content.to_string(), range))
+                to_range(pad.account.span).map(|range| (pad.account.content.to_string(), range))
             } else if span_contains(pad.from_account.span, byte_idx) {
                 to_range(pad.from_account.span)
                     .map(|range| (pad.from_account.content.to_string(), range))
@@ -111,11 +112,15 @@ pub fn account_at_position(doc: &Document, position: Position) -> Option<(String
             .then(|| to_range(note.account.span))
             .flatten()
             .map(|range| (note.account.content.to_string(), range)),
-        ast::Directive::Document(doc_directive) => span_contains(doc_directive.account.span, byte_idx)
-            .then(|| to_range(doc_directive.account.span))
-            .flatten()
-            .map(|range| (doc_directive.account.content.to_string(), range)),
-        ast::Directive::Raw(raw) => text_account_in_span(doc, byte_idx, raw.span.start..raw.span.end),
+        ast::Directive::Document(doc_directive) => {
+            span_contains(doc_directive.account.span, byte_idx)
+                .then(|| to_range(doc_directive.account.span))
+                .flatten()
+                .map(|range| (doc_directive.account.content.to_string(), range))
+        }
+        ast::Directive::Raw(raw) => {
+            text_account_in_span(doc, byte_idx, raw.span.start..raw.span.end)
+        }
         _ => None,
     }
 }
