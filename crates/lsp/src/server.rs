@@ -523,6 +523,7 @@ impl LanguageServer for Backend {
                     completion::completion(&docs, &current_uri, &params)
                 }
             }
+            .map(CompletionResponse::List)
         })
         .await
     }
