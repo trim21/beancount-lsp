@@ -214,7 +214,12 @@ fn collect_tokens(doc: &crate::doc::Document, out: &mut Vec<RawToken>) {
             }
             ast::Directive::Document(doc_directive) => {
                 push_token_from_span(content, doc_directive.keyword, TokenKind::Keyword, out);
-                push_token_from_span(content, doc_directive.account.span, TokenKind::Parameter, out);
+                push_token_from_span(
+                    content,
+                    doc_directive.account.span,
+                    TokenKind::Parameter,
+                    out,
+                );
             }
             ast::Directive::Custom(custom) => {
                 push_token_from_span(content, custom.keyword, TokenKind::Keyword, out);

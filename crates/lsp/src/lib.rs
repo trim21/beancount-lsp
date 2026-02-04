@@ -5,9 +5,9 @@ use std::path::PathBuf;
 mod checkers;
 mod indexer;
 pub use crate::indexer::Indexer;
+mod doc;
 mod providers;
 mod server;
-mod doc;
 mod text;
 
 use clap::{Parser, ValueEnum, error::ErrorKind as ClapErrorKind};

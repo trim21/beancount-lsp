@@ -10,17 +10,22 @@ use crate::providers::account::account_at_position;
 use crate::server::{Document, documents_bfs, find_document};
 use crate::text::byte_span_to_lsp_range;
 
-fn collect_open_definitions(doc: &Document, uri: &Url, account: &str, locations: &mut Vec<Location>) {
+fn collect_open_definitions(
+    doc: &Document,
+    uri: &Url,
+    account: &str,
+    locations: &mut Vec<Location>,
+) {
     for directive in doc.ast() {
-        if let ast::Directive::Open(open) = directive {
-            if open.account.content == account {
-                if let Some(range) = byte_span_to_lsp_range(&doc.rope, open.account.span.start, open.account.span.end) {
-                    locations.push(Location {
-                        uri: uri.clone(),
-                        range,
-                    });
-                }
-            }
+        if let ast::Directive::Open(open) = directive
+            && open.account.content == account
+            && let Some(range) =
+                byte_span_to_lsp_range(&doc.rope, open.account.span.start, open.account.span.end)
+        {
+            locations.push(Location {
+                uri: uri.clone(),
+                range,
+            });
         }
     }
 }

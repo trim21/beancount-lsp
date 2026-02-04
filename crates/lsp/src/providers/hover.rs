@@ -64,8 +64,8 @@ pub fn hover(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::account::account_at_position;
     use crate::doc;
+    use crate::providers::account::account_at_position;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
         Position, TextDocumentIdentifier, TextDocumentPositionParams,

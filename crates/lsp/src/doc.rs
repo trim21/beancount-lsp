@@ -1,6 +1,6 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::cmp::Ordering;
 
 use beancount_parser::{ast, core, parse_str};
 use ropey::Rope;
@@ -25,10 +25,9 @@ pub(crate) fn find_document(
         if let Some(candidate_path) = key
             .to_file_path()
             .map(|path| Indexer::normalized_path_key(path.as_ref()))
+            && candidate_path == target
         {
-            if candidate_path == target {
-                return Some(Arc::clone(doc));
-            }
+            return Some(Arc::clone(doc));
         }
     }
 
@@ -87,17 +86,18 @@ impl Document {
     /// AST directives are expected to be sorted and non-overlapping.
     pub fn directive_at_offset(&self, byte_idx: usize) -> Option<&ast::Directive<'_>> {
         let directives = self.ast();
-        let idx = directives.binary_search_by(|directive| {
-            let span = Self::directive_span(directive);
-            if byte_idx < span.start {
-                Ordering::Greater
-            } else if byte_idx >= span.end {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
-        })
-        .ok()?;
+        let idx = directives
+            .binary_search_by(|directive| {
+                let span = Self::directive_span(directive);
+                if byte_idx < span.start {
+                    Ordering::Greater
+                } else if byte_idx >= span.end {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .ok()?;
 
         directives.get(idx)
     }
