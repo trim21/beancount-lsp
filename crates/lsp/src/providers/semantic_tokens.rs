@@ -481,11 +481,7 @@ fn push_tolerance_token(
     }
 
     let token = &raw[start..end];
-    let token_start_in_raw = token
-        .char_indices()
-        .next()
-        .map(|(idx, ch)| (idx, ch))
-        .unwrap_or((0, '\0'));
+    let token_start_in_raw = token.char_indices().next().unwrap_or((0, '\0'));
 
     let (trim_offset, trimmed) = match token_start_in_raw {
         (idx, ch) if ch == '~' || ch == '-' || ch == '+' => {
