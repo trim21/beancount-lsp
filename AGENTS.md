@@ -28,11 +28,13 @@ This is a **beancount language server** implementation written in Rust that prov
 - Python package builds with maturin; from the repo root use the project-local virtualenv and run `uv run --project crates/lsp-py maturin develop` to build and install the extension in editable mode.
 - Workspace dependencies share versions via `[workspace.dependencies]` in [Cargo.toml](Cargo.toml); `beancount-parser` is pinned to a specific git revision—avoid bumping without testing parser output.
 
+- When you touch rust code, you must run `cargo check -p beancount-lsp` to check if your code is correct. If it doesn't, you should fix the errors.
+
 ## Conventions and cautions
 - Stick to async patterns already in use (Tokio multi-thread runtime; `tower_lsp_server` async handlers).
 - The server assumes full document sync; if you add incremental sync, adjust the capability and cache update logic together.
 - Keep file paths ASCII-friendly; diagnostics and parser calls derive filenames from URIs.
-- Avoid global installs; use the repo-local `.venv` and `uv` for Python tooling.
+- Avoid global installs; use the repo-local `.venv` and `uv` for Python tooling. but if there is already some tools in global PATH, for example, user installed `matruin`, you should avoid install it again in local env.
 
 
 ## Gotcha

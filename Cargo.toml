@@ -4,8 +4,7 @@ members = ["crates/lsp", "crates/lsp-py"]
 package.version = "0.0.0"
 
 [workspace.dependencies]
-beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "8b4e3311258194fe3127862dd4132028e97cc01d" }
-beancount-tree-sitter = { git = "https://github.com/trim21/beancount.git", rev = "8b4e3311258194fe3127862dd4132028e97cc01d" }
+beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "af3711ec6d24e2d120a3253d4a7a03524837af33" }
 ropey = "1.6.1"
 tokio = { version = "1.49.0", features = ["io-std", "macros", "rt-multi-thread", "sync"] }
 tower-lsp-server = "0.23.0"

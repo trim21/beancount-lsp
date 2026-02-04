@@ -27,4 +27,5 @@ experiments/v3/arrow/*.arrow
 .env
 target
 uv.lock
+tmp/
 .envrc

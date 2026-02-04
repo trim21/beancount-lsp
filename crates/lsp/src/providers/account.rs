@@ -1,4 +1,4 @@
-use beancount_tree_sitter::NodeKind;
+use beancount_parser::ast;
 use tower_lsp_server::ls_types::{Position, Range};
 
 use crate::server::Document;
@@ -69,74 +69,83 @@ fn text_account_at_position(doc: &Document, position: Position) -> Option<(Strin
 pub fn account_at_position(doc: &Document, position: Position) -> Option<(String, Range)> {
     let byte_idx = lsp_position_to_byte(&doc.rope, position)?;
 
-    let mut stack = vec![doc.tree.root_node()];
-    while let Some(node) = stack.pop() {
-        let start_byte = node.start_byte();
-        let end_byte = node.end_byte();
+    fn span_contains(span: ast::Span, byte_idx: usize) -> bool {
+        span.start <= byte_idx && byte_idx < span.end
+    }
 
-        // Only descend into nodes that could contain the cursor.
-        if !(start_byte <= byte_idx && byte_idx <= end_byte) {
-            continue;
-        }
+    let to_range = |span: ast::Span| {
+        let start = byte_to_lsp_position(&doc.rope, span.start)?;
+        let end = byte_to_lsp_position(&doc.rope, span.end)?;
+        Some(Range { start, end })
+    };
 
-        if NodeKind::from(node.kind()) == NodeKind::Account {
-            let text = doc
-                .rope
-                .byte_slice(start_byte..end_byte)
-                .to_string()
-                .trim()
-                .to_owned();
-
-            if text.is_empty() {
-                return None;
+    for directive in doc.ast() {
+        match directive {
+            ast::Directive::Open(open) => {
+                if span_contains(open.account.span, byte_idx) {
+                    let range = to_range(open.account.span)?;
+                    return Some((open.account.content.to_string(), range));
+                }
             }
-
-            let start = byte_to_lsp_position(&doc.rope, start_byte)?;
-            let end = byte_to_lsp_position(&doc.rope, end_byte)?;
-
-            return Some((text, Range { start, end }));
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            stack.push(child);
+            ast::Directive::Close(close) => {
+                if span_contains(close.account.span, byte_idx) {
+                    let range = to_range(close.account.span)?;
+                    return Some((close.account.content.to_string(), range));
+                }
+            }
+            ast::Directive::Balance(balance) => {
+                if span_contains(balance.account.span, byte_idx) {
+                    let range = to_range(balance.account.span)?;
+                    return Some((balance.account.content.to_string(), range));
+                }
+            }
+            ast::Directive::Pad(pad) => {
+                if span_contains(pad.account.span, byte_idx) {
+                    let range = to_range(pad.account.span)?;
+                    return Some((pad.account.content.to_string(), range));
+                }
+                if span_contains(pad.from_account.span, byte_idx) {
+                    let range = to_range(pad.from_account.span)?;
+                    return Some((pad.from_account.content.to_string(), range));
+                }
+            }
+            ast::Directive::Transaction(tx) => {
+                for posting in &tx.postings {
+                    if span_contains(posting.account.span, byte_idx) {
+                        let range = to_range(posting.account.span)?;
+                        return Some((posting.account.content.to_string(), range));
+                    }
+                }
+            }
+            ast::Directive::Note(note) => {
+                if span_contains(note.account.span, byte_idx) {
+                    let range = to_range(note.account.span)?;
+                    return Some((note.account.content.to_string(), range));
+                }
+            }
+            ast::Directive::Document(doc_directive) => {
+                if span_contains(doc_directive.account.span, byte_idx) {
+                    let range = to_range(doc_directive.account.span)?;
+                    return Some((doc_directive.account.content.to_string(), range));
+                }
+            }
+            _ => {}
         }
     }
 
-    // Fallback to a plain-text heuristic when the parse tree does not yield an account node.
+    // Fallback to a plain-text heuristic when structured spans don't match.
     text_account_at_position(doc, position)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
-    use ropey::Rope;
+    use crate::doc;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{Position, Uri as Url};
 
     fn build_doc(uri: &Url, content: &str) -> Document {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let includes = directives
-            .iter()
-            .filter_map(|directive| match directive {
-                core::CoreDirective::Include(include) => Some(include.filename.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let rope = Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Document {
-            directives,
-            includes,
-            content: content.to_owned(),
-            rope,
-            tree,
-        }
+        doc::build_document(content.to_string(), uri.as_str()).expect("build doc")
     }
 
     #[test]

@@ -65,34 +65,14 @@ pub fn hover(
 mod tests {
     use super::*;
     use crate::providers::account::account_at_position;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
+    use crate::doc;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
         Position, TextDocumentIdentifier, TextDocumentPositionParams,
     };
 
     fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let includes = directives
-            .iter()
-            .filter_map(|directive| match directive {
-                core::CoreDirective::Include(include) => Some(include.filename.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Arc::new(Document {
-            directives,
-            includes,
-            content: content.to_owned(),
-            rope,
-            tree,
-        })
+        Arc::new(doc::build_document(content.to_string(), uri.as_str()).expect("build doc"))
     }
 
     #[test]

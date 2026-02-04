@@ -1,15 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use beancount_parser::core;
-use beancount_tree_sitter::{NodeKind, tree_sitter};
+use beancount_parser::{ast, core};
 use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionParams, CompletionTextEdit,
     Position, Range, TextEdit, Uri as Url,
 };
 
 use crate::server::{Document, documents_bfs, find_document};
-use crate::text::{byte_to_lsp_position, lsp_position_to_byte, lsp_position_to_ts_point};
+use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
 const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note", "price"];
 const ROOT_KEYWORDS: &[&str] = &[
@@ -140,42 +139,23 @@ fn tag_prefix_at_position(doc: &Document, position: Position) -> Option<(String,
     ))
 }
 
-fn is_within_kind(doc: &Document, position: Position, target: NodeKind) -> bool {
-    let Some(point) = lsp_position_to_ts_point(&doc.rope, position) else {
-        return false;
+fn is_within_account_context(doc: &Document, byte_idx: usize) -> bool {
+    let directive = match doc.directive_at_offset(byte_idx) {
+        Some(d) => d,
+        None => return false,
     };
 
-    let root = doc.tree.root_node();
-
-    let check_point = |p: tree_sitter::Point| {
-        let node = root
-            .named_descendant_for_point_range(p, p)
-            .or_else(|| root.descendant_for_point_range(p, p));
-
-        let mut current = node;
-        while let Some(node) = current {
-            if NodeKind::from(node.kind()) == target {
-                return true;
-            }
-            current = node.parent();
-        }
-
-        false
-    };
-
-    if check_point(point) {
-        return true;
+    match directive {
+        ast::Directive::Open(_)
+        | ast::Directive::Balance(_)
+        | ast::Directive::Pad(_)
+        | ast::Directive::Close(_) => true,
+        ast::Directive::Transaction(tx) => tx
+            .postings
+            .iter()
+            .any(|p| p.span.start <= byte_idx && byte_idx < p.span.end),
+        _ => false,
     }
-
-    if point.column > 0 {
-        let query_point = tree_sitter::Point {
-            row: point.row,
-            column: point.column.saturating_sub(1),
-        };
-        return check_point(query_point);
-    }
-
-    false
 }
 
 fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
@@ -228,46 +208,17 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     let trimmed = line_slice.trim_start();
     let indent = line_slice.len().saturating_sub(trimmed.len());
 
-    let in_account_node = is_within_kind(doc, position, NodeKind::Account);
-    let in_tag_node = is_within_kind(doc, position, NodeKind::Tag);
+    let in_account_context = is_within_account_context(doc, cursor_byte);
 
     if indent == 0
         && has_date_prefix(&line_slice, indent)
-        && !in_account_node
+        && !in_account_context
         && let Some((prefix, range)) = tag_prefix_at_position(doc, position)
     {
         return Some(CompletionMode::Tag { prefix, range });
     }
 
-    // Prefer a tree-based context: walk ancestors to see if we're in posting/open/balance.
-    let mut allow_account = false;
-    if in_account_node {
-        allow_account = true;
-    } else if let Some(point) = lsp_position_to_ts_point(&doc.rope, position) {
-        let query_point = tree_sitter::Point {
-            row: point.row,
-            column: point.column.saturating_sub(1),
-        };
-        let root = doc.tree.root_node();
-        if let Some(mut node) = root
-            .named_descendant_for_point_range(query_point, point)
-            .or_else(|| root.descendant_for_point_range(query_point, point))
-        {
-            loop {
-                let kind = NodeKind::from(node.kind());
-                if matches!(kind, NodeKind::Open | NodeKind::Balance) || node.kind() == "posting" {
-                    allow_account = true;
-                    break;
-                }
-
-                if let Some(parent) = node.parent() {
-                    node = parent;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
+    let mut allow_account = in_account_context;
 
     // Fallback heuristic: indented posting line or account-taking directives (open/balance).
     if !allow_account {
@@ -304,8 +255,7 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     if indent == 0
         && has_date_prefix(&line_slice, indent)
         && rel >= indent + 10
-        && !in_account_node
-        && !in_tag_node
+        && !in_account_context
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
         && DATE_KEYWORDS
             .iter()
@@ -319,8 +269,7 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     }
 
     if indent == 0
-        && !in_account_node
-        && !in_tag_node
+        && !in_account_context
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
         && ROOT_KEYWORDS
             .iter()
@@ -430,30 +379,6 @@ pub fn completion(
                         }
                     }
                 }
-
-                if tags.is_empty() {
-                    let root = doc.tree.root_node();
-                    let mut stack = vec![root];
-                    while let Some(node) = stack.pop() {
-                        if NodeKind::from(node.kind()) == NodeKind::Tag {
-                            let text = doc
-                                .rope
-                                .byte_slice(node.start_byte()..node.end_byte())
-                                .to_string();
-                            if let Some(stripped) = text.strip_prefix('#')
-                                && !stripped.is_empty()
-                            {
-                                tags.insert(stripped.to_string());
-                            }
-                        }
-
-                        for idx in (0..node.child_count()).rev() {
-                            if let Some(child) = node.child(u32::try_from(idx).unwrap()) {
-                                stack.push(child);
-                            }
-                        }
-                    }
-                }
             }
 
             tags.into_iter()
@@ -486,8 +411,7 @@ pub fn completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
+    use crate::doc;
     use std::collections::HashSet;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
@@ -518,24 +442,10 @@ mod tests {
         let cursor = cursor.expect("cursor marker '|' not found");
         let content = content_lines.join("\n");
 
-        let _uri = Url::from_str("file:///completion-helper.bean").unwrap();
-        let directives = Vec::new();
-        let includes = Vec::new();
-        let rope = ropey::Rope::from_str(&content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(&content, None).unwrap();
+        let uri = Url::from_str("file:///completion-helper.bean").unwrap();
+        let doc = doc::build_document(content, uri.as_str()).expect("build doc");
 
-        (
-            Arc::new(Document {
-                directives,
-                includes,
-                content,
-                rope,
-                tree,
-            }),
-            cursor,
-        )
+        (Arc::new(doc), cursor)
     }
 
     fn determine_context_helper(lines: &[&str]) -> Option<CompletionMode> {
@@ -559,26 +469,7 @@ mod tests {
     }
 
     fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let includes = directives
-            .iter()
-            .filter_map(|directive| match directive {
-                core::CoreDirective::Include(include) => Some(include.filename.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Arc::new(Document {
-            directives,
-            includes,
-            content: content.to_owned(),
-            rope,
-            tree,
-        })
+        Arc::new(doc::build_document(content.to_string(), uri.as_str()).expect("build doc"))
     }
 
     #[test]

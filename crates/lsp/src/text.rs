@@ -1,6 +1,5 @@
 use std::convert::TryFrom;
 
-use beancount_tree_sitter::tree_sitter;
 use ropey::Rope;
 use tower_lsp_server::ls_types::{Position, Range};
 
@@ -63,24 +62,4 @@ pub fn byte_span_to_lsp_range(content: &Rope, start_byte: usize, end_byte: usize
     let start = byte_to_lsp_position(content, start_byte)?;
     let end = byte_to_lsp_position(content, end_byte)?;
     Some(Range { start, end })
-}
-
-/// Convert an LSP UTF-16 position to a tree-sitter point (row, byte column).
-pub fn lsp_position_to_ts_point(content: &Rope, position: Position) -> Option<tree_sitter::Point> {
-    let byte_idx = lsp_position_to_byte(content, position)?;
-    let row = content.byte_to_line(byte_idx);
-    let row_start = content.line_to_byte(row);
-    let column = byte_idx.checked_sub(row_start)?;
-    Some(tree_sitter::Point { row, column })
-}
-
-/// Convert a tree-sitter point (row, byte column) to an LSP UTF-16 position.
-pub fn ts_point_to_lsp_position(content: &Rope, point: tree_sitter::Point) -> Option<Position> {
-    if point.row >= content.len_lines() {
-        return None;
-    }
-
-    let line_start = content.line_to_byte(point.row);
-    let byte_idx = line_start.checked_add(point.column)?;
-    byte_to_lsp_position(content, byte_idx)
 }

@@ -5,9 +5,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::anyhow;
-use beancount_parser::core;
-use beancount_tree_sitter::tree_sitter;
-use ropey::Rope;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock, mpsc, watch};
 use tokio::task;
@@ -29,29 +26,6 @@ use crate::checkers::{self, Checker, CheckerDiagnostic};
 use crate::indexer::{Indexer, canonical_or_original};
 use crate::providers::definition;
 use crate::providers::{completion, hover, semantic_tokens};
-
-fn url_normalized_key(url: &Url) -> Option<String> {
-    let path = url.to_file_path()?;
-    Some(Indexer::normalized_path_key(path.as_ref()))
-}
-
-/// Find a document by URI, tolerating platform-specific path casing/format differences.
-pub(crate) fn find_document(
-    documents: &HashMap<Url, Arc<Document>>,
-    uri: &Url,
-) -> Option<Arc<Document>> {
-    if let Some(doc) = documents.get(uri) {
-        return Some(Arc::clone(doc));
-    }
-
-    let target = url_normalized_key(uri)?;
-
-    documents.iter().find_map(|(key, doc)| {
-        url_normalized_key(key)
-            .filter(|candidate| candidate == &target)
-            .map(|_| Arc::clone(doc))
-    })
-}
 
 pub(crate) fn documents_bfs(
     documents: &HashMap<Url, Arc<Document>>,
@@ -107,13 +81,8 @@ fn resolve_document_from_snapshot(
     Indexer::parse_document(&content, path.as_ref()).map(Arc::new)
 }
 
-pub struct Document {
-    pub directives: Vec<core::CoreDirective>,
-    pub includes: Vec<String>,
-    pub content: String,
-    pub rope: Rope,
-    pub tree: tree_sitter::Tree,
-}
+pub type Document = crate::doc::Document;
+pub(crate) use crate::doc::find_document;
 
 #[derive(Clone)]
 pub struct Backend {
@@ -584,7 +553,7 @@ impl LanguageServer for Backend {
                 resolve_document_from_snapshot(snapshot.as_ref(), &uri)
             })
             .await?;
-        Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(&doc.content)))
+        Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(doc.as_ref())))
     }
 }
 
