@@ -27,6 +27,7 @@ tracing-subscriber = { version = "0.3.22", features = ["fmt"] }
 
 [dev-dependencies]
 criterion = "0.5.1"
+insta = { version = "1.39.0", features = ["glob"] }
 tempfile = "3.24.0"
 
 [[bench]]
