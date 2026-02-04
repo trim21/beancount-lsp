@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use beancount_parser::core;
 use tower_lsp_server::ls_types::{
@@ -6,11 +7,15 @@ use tower_lsp_server::ls_types::{
 };
 
 use crate::providers::account::account_at_position;
-use crate::server::{Document, find_document};
+use crate::server::{Document, documents_bfs, find_document};
 
-fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<String> {
+fn notes_for_account(
+    documents: &HashMap<Url, Arc<Document>>,
+    root_uri: &Url,
+    account: &str,
+) -> Vec<String> {
     let mut notes = Vec::new();
-    for doc in documents.values() {
+    for (_, doc) in documents_bfs(documents, root_uri) {
         for dir in &doc.directives {
             if let core::CoreDirective::Note(n) = dir
                 && n.account == account
@@ -24,13 +29,17 @@ fn notes_for_account(documents: &HashMap<Url, Document>, account: &str) -> Vec<S
     notes
 }
 
-pub fn hover(documents: &HashMap<Url, Document>, params: &HoverParams) -> Option<Hover> {
+pub fn hover(
+    documents: &HashMap<Url, Arc<Document>>,
+    root_uri: &Url,
+    params: &HoverParams,
+) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
-    let (account, account_range) =
-        find_document(documents, uri).and_then(|doc| account_at_position(doc, position))?;
+    let (account, account_range) = find_document(documents, uri)
+        .and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
-    let notes = notes_for_account(documents, &account);
+    let notes = notes_for_account(documents, root_uri, &account);
     if notes.is_empty() {
         return None;
     }
@@ -63,19 +72,27 @@ mod tests {
         Position, TextDocumentIdentifier, TextDocumentPositionParams,
     };
 
-    fn build_doc(uri: &Url, content: &str) -> Document {
+    fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
         let directives =
             core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
+        let includes = directives
+            .iter()
+            .filter_map(|directive| match directive {
+                core::CoreDirective::Include(include) => Some(include.filename.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let rope = ropey::Rope::from_str(content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(content, None).unwrap();
-        Document {
+        Arc::new(Document {
             directives,
+            includes,
             content: content.to_owned(),
             rope,
             tree,
-        }
+        })
     }
 
     #[test]
@@ -89,10 +106,10 @@ mod tests {
 
         let cursor = Position::new(1, 20);
 
-        let hit = account_at_position(docs.get(&uri).unwrap(), cursor);
+        let hit = account_at_position(docs.get(&uri).unwrap().as_ref(), cursor);
         assert!(hit.is_some(), "expected account under cursor");
 
-        let notes = notes_for_account(&docs, "Assets:Cash");
+        let notes = notes_for_account(&docs, &uri, "Assets:Cash");
         assert!(!notes.is_empty(), "expected notes for account");
 
         let params = HoverParams {
@@ -103,7 +120,7 @@ mod tests {
             work_done_progress_params: Default::default(),
         };
 
-        let hover = hover(&docs, &params).expect("hover present");
+        let hover = hover(&docs, &uri, &params).expect("hover present");
         let contents = match hover.contents {
             HoverContents::Markup(markup) => markup.value,
             _ => panic!("expected markup hover"),

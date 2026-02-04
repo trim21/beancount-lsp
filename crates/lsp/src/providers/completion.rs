@@ -1,17 +1,20 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use beancount_parser::core;
 use beancount_tree_sitter::{NodeKind, tree_sitter};
 use tower_lsp_server::ls_types::{
-    CompletionItem, CompletionItemKind, CompletionParams, CompletionResponse, CompletionTextEdit,
+    CompletionItem, CompletionItemKind, CompletionList, CompletionParams, CompletionTextEdit,
     Position, Range, TextEdit, Uri as Url,
 };
 
-use crate::server::{Document, find_document};
+use crate::server::{Document, documents_bfs, find_document};
 use crate::text::{byte_to_lsp_position, lsp_position_to_byte, lsp_position_to_ts_point};
 
-const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note"];
-const ROOT_KEYWORDS: &[&str] = &["include", "option"];
+const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note", "price"];
+const ROOT_KEYWORDS: &[&str] = &[
+    "include", "option", "pushtag", "poptag", "pushmeta", "popmeta",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompletionMode {
@@ -349,14 +352,15 @@ fn fuzzy_match(candidate: &str, prefix: &str) -> bool {
 }
 
 pub fn completion(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, Arc<Document>>,
+    root_uri: &Url,
     params: &CompletionParams,
-) -> Option<CompletionResponse> {
+) -> Option<CompletionList> {
     let uri = &params.text_document_position.text_document.uri;
     let position = params.text_document_position.position;
     let doc = find_document(documents, uri)?;
 
-    let ctx = match determine_completion_context(doc, position) {
+    let ctx = match determine_completion_context(doc.as_ref(), position) {
         Some(ctx) => ctx,
         None => {
             return None;
@@ -371,7 +375,7 @@ pub fn completion(
             range: replace_range,
         } => {
             let mut accounts = HashSet::new();
-            for doc in documents.values() {
+            for (_, doc) in documents_bfs(documents, root_uri) {
                 for dir in &doc.directives {
                     if let core::CoreDirective::Open(o) = dir {
                         accounts.insert(o.account.clone());
@@ -416,7 +420,7 @@ pub fn completion(
             range: replace_range,
         } => {
             let mut tags = HashSet::new();
-            for doc in documents.values() {
+            for (_, doc) in documents_bfs(documents, root_uri) {
                 for dir in &doc.directives {
                     if let core::CoreDirective::Transaction(tx) = dir {
                         for tag in &tx.tags {
@@ -472,7 +476,10 @@ pub fn completion(
     if items.is_empty() {
         None
     } else {
-        Some(CompletionResponse::Array(items))
+        Some(CompletionList {
+            is_incomplete: false,
+            items,
+        })
     }
 }
 
@@ -489,7 +496,7 @@ mod tests {
     };
 
     /// Build a document and cursor position from lines containing a single `|` marker.
-    fn doc_with_cursor(lines: &[&str]) -> (Document, Position) {
+    fn doc_with_cursor(lines: &[&str]) -> (Arc<Document>, Position) {
         let mut content_lines = Vec::new();
         let mut cursor: Option<Position> = None;
 
@@ -513,25 +520,31 @@ mod tests {
 
         let _uri = Url::from_str("file:///completion-helper.bean").unwrap();
         let directives = Vec::new();
+        let includes = Vec::new();
         let rope = ropey::Rope::from_str(&content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(&content, None).unwrap();
 
         (
-            Document {
+            Arc::new(Document {
                 directives,
+                includes,
                 content,
                 rope,
                 tree,
-            },
+            }),
             cursor,
         )
     }
 
     fn determine_context_helper(lines: &[&str]) -> Option<CompletionMode> {
         let (doc, pos) = doc_with_cursor(lines);
-        determine_completion_context(&doc, pos)
+        determine_completion_context(doc.as_ref(), pos)
+    }
+
+    fn completion_items(response: Option<CompletionList>) -> Vec<CompletionItem> {
+        response.expect("got completion").items
     }
 
     fn assert_account_range(lines: &[&str], start: Position, end: Position) {
@@ -545,19 +558,27 @@ mod tests {
         }
     }
 
-    fn build_doc(uri: &Url, content: &str) -> Document {
+    fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
         let directives =
             core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
+        let includes = directives
+            .iter()
+            .filter_map(|directive| match directive {
+                core::CoreDirective::Include(include) => Some(include.filename.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let rope = ropey::Rope::from_str(content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(content, None).unwrap();
-        Document {
+        Arc::new(Document {
             directives,
+            includes,
             content: content.to_owned(),
             rope,
             tree,
-        }
+        })
     }
 
     #[test]
@@ -583,11 +604,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &uri, &params));
 
         let item = items
             .iter()
@@ -605,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn suppresses_completion_at_document_root() {
+    fn offers_completion_at_document_root() {
         let lines = [r#"a|"#];
         let (doc, position) = doc_with_cursor(&lines);
         let uri = Url::from_str("file:///completion-helper.bean").unwrap();
@@ -626,10 +643,10 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params);
+        let items = completion_items(completion(&documents, &uri, &params));
         assert!(
-            response.is_none(),
-            "expected no completion at document root"
+            !items.is_empty(),
+            "expected root keyword completions at document root"
         );
     }
 
@@ -705,11 +722,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &open_uri, &params));
 
         let item = items
             .iter()
@@ -750,11 +763,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &uri, &params));
 
         let item = items
             .iter()
@@ -794,7 +803,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params);
+        let response = completion(&documents, &uri, &params);
         assert!(
             response.is_none(),
             "expected no completion outside account nodes"
@@ -834,7 +843,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params);
+        let response = completion(&documents, &open_uri, &params);
         assert!(
             response.is_none(),
             "expected no account completion in amount field"
@@ -870,7 +879,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params);
+        let response = completion(&documents, &open_uri, &params);
         assert!(
             response.is_none(),
             "expected no account completion after posting account"
@@ -905,11 +914,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &uri, &params));
 
         let tag = items
             .iter()
@@ -956,11 +961,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &uri, &params));
 
         let tag = items
             .iter()
@@ -1009,11 +1010,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &tag_uri, &params));
 
         let tag = items
             .iter()
@@ -1054,11 +1051,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &uri, &params));
 
         let labels: HashSet<&str> = items.iter().map(|i| i.label.as_str()).collect();
         for expected in ["custom", "balance", "open", "close", "note"] {
@@ -1101,11 +1094,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params).expect("got completion");
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            _ => panic!("unexpected completion response"),
-        };
+        let items = completion_items(completion(&documents, &uri, &params));
 
         let labels: HashSet<&str> = items.iter().map(|i| i.label.as_str()).collect();
         for expected in ["include", "option"] {
@@ -1156,7 +1145,7 @@ mod tests {
             }),
         };
 
-        let response = completion(&documents, &params);
+        let response = completion(&documents, &stored_uri, &params);
         assert!(
             response.is_some(),
             "expected completion despite URI casing differences"

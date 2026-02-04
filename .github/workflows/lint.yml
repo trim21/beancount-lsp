@@ -1,4 +1,4 @@
-name: tests
+name: lint
 
 on:
   push:
@@ -16,8 +16,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust:
-    name: Rust fmt, lint, tests
+  lint:
+    name: Rust fmt, lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -29,13 +29,5 @@ jobs:
 
       - name: Lint (clippy)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Test (cargo test)
-        run: cargo test --workspace --all-targets --all-features
-
-  pre-commit:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
 
       - uses: trim21/actions/prek@master

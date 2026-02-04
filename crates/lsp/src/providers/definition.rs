@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use beancount_tree_sitter::{NodeKind, tree_sitter};
 use ropey::Rope;
@@ -7,7 +8,7 @@ use tower_lsp_server::ls_types::{
 };
 
 use crate::providers::account::account_at_position;
-use crate::server::{Document, find_document};
+use crate::server::{Document, documents_bfs, find_document};
 use crate::text::ts_point_to_lsp_position;
 
 fn collect_open_definitions(
@@ -57,18 +58,19 @@ fn collect_nodes(
 }
 
 pub fn goto_definition(
-    documents: &HashMap<Url, Document>,
+    documents: &HashMap<Url, Arc<Document>>,
+    root_uri: &Url,
     params: &GotoDefinitionParams,
 ) -> Option<GotoDefinitionResponse> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
 
-    let (account, _) =
-        find_document(documents, uri).and_then(|doc| account_at_position(doc, position))?;
+    let (account, _) = find_document(documents, uri)
+        .and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
     let mut locations = Vec::new();
-    for (doc_uri, doc) in documents.iter() {
-        collect_open_definitions(doc, doc_uri, &account, &mut locations);
+    for (doc_uri, doc) in documents_bfs(documents, root_uri) {
+        collect_open_definitions(doc.as_ref(), &doc_uri, &account, &mut locations);
     }
 
     if locations.is_empty() {
@@ -88,19 +90,27 @@ mod tests {
         Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri as Url,
     };
 
-    fn build_doc(uri: &Url, content: &str) -> Document {
+    fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
         let directives =
             core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
+        let includes = directives
+            .iter()
+            .filter_map(|directive| match directive {
+                core::CoreDirective::Include(include) => Some(include.filename.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let rope = ropey::Rope::from_str(content);
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&language()).unwrap();
         let tree = parser.parse(content, None).unwrap();
-        Document {
+        Arc::new(Document {
             directives,
+            includes,
             content: content.to_owned(),
             rope,
             tree,
-        }
+        })
     }
 
     #[test]
@@ -128,7 +138,7 @@ mod tests {
             partial_result_params: Default::default(),
         };
 
-        let resp = goto_definition(&docs, &params).expect("definition response");
+        let resp = goto_definition(&docs, &open_uri, &params).expect("definition response");
         let locations = match resp {
             GotoDefinitionResponse::Array(locs) => locs,
             _ => panic!("unexpected goto definition response"),
