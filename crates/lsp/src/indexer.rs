@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::{Result as AnyResult, anyhow};
 use beancount_parser::{core, parse};

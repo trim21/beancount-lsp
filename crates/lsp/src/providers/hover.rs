@@ -36,8 +36,8 @@ pub fn hover(
 ) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
-    let (account, account_range) =
-        find_document(documents, uri).and_then(|doc| account_at_position(doc.as_ref(), position))?;
+    let (account, account_range) = find_document(documents, uri)
+        .and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
     let notes = notes_for_account(documents, root_uri, &account);
     if notes.is_empty() {
