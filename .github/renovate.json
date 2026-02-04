@@ -36,13 +36,6 @@
         "@types/vscode"
       ],
       "enabled": false
-    },
-    {
-      "matchDepNames": [
-        "beancount-tree-sitter",
-        "beancount-parser"
-      ],
-      "enabled": false
     }
   ]
 }
