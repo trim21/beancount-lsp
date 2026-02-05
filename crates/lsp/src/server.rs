@@ -11,7 +11,8 @@ use tokio::task;
 use tower_lsp_server::jsonrpc::{Error, Result};
 use tower_lsp_server::ls_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams,
     GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
     InitializeParams, InitializeResult, InitializedParams, MessageType, Position, Range,
     SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams,
@@ -81,10 +82,22 @@ fn resolve_document_from_snapshot(
     Indexer::parse_document(&content, path.as_ref()).map(Arc::new)
 }
 
-fn reparse_document_from_disk(uri: &Url) -> Option<Arc<Document>> {
-    let path = uri.to_file_path()?;
-    let content = fs::read_to_string(path.as_ref()).ok()?;
-    Indexer::parse_document(&content, path.as_ref()).map(Arc::new)
+async fn reparse_document_from_disk_async(uri: Url) -> Option<Arc<Document>> {
+    let path: PathBuf = uri.to_file_path()?.to_path_buf();
+
+    let content = tokio::fs::read_to_string(&path).await.ok()?;
+
+    task::spawn_blocking(move || Indexer::parse_document(&content, path.as_ref()).map(Arc::new))
+        .await
+        .ok()?
+}
+
+async fn parse_document_from_text_async(uri: Url, text: Arc<String>) -> Option<Arc<Document>> {
+    let path: PathBuf = uri.to_file_path()?.to_path_buf();
+
+    task::spawn_blocking(move || Indexer::parse_document(text.as_str(), path.as_ref()).map(Arc::new))
+        .await
+        .ok()?
 }
 
 pub type Document = crate::doc::Document;
@@ -94,6 +107,7 @@ pub(crate) use crate::doc::find_document;
 pub struct Backend {
     client: Client,
     inner: Arc<RwLock<Option<InnerBackend>>>, // initialized state
+    documents_text: Arc<RwLock<HashMap<Url, Arc<String>>>>,
     checker: Option<Arc<dyn Checker>>,
     checker_queued: Arc<AtomicBool>,
     checker_tx: mpsc::UnboundedSender<()>,
@@ -155,6 +169,7 @@ impl Backend {
         Self {
             client,
             inner: Arc::new(RwLock::new(None)),
+            documents_text: Arc::new(RwLock::new(HashMap::new())),
             checker: checkers::create().map(Arc::<dyn Checker>::from),
             checker_queued: Arc::new(AtomicBool::new(false)),
             checker_tx,
@@ -324,6 +339,10 @@ impl Backend {
     }
 
     async fn update_document(&self, uri: Url, text: String) {
+        {
+            let mut guard = self.documents_text.write().await;
+            guard.insert(uri.clone(), Arc::new(text.clone()));
+        }
         let _ = self.indexer_tx.send(IndexerCommand::Update { uri, text });
         if self
             .inner
@@ -469,6 +488,11 @@ impl LanguageServer for Backend {
             .await;
     }
 
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let mut guard = self.documents_text.write().await;
+        guard.remove(&params.text_document.uri);
+    }
+
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         if let Some(change) = params.content_changes.into_iter().last() {
             self.update_document(params.text_document.uri, change.text)
@@ -488,22 +512,38 @@ impl LanguageServer for Backend {
         tracing::debug!("completion triggered");
         let current_uri = params.text_document_position.text_document.uri.clone();
 
-        self.with_inner(|inner| {
-            let snapshot = inner.snapshot_rx.borrow().clone();
+        let (snapshot, root_uri) = self
+            .with_inner(|inner| {
+                let snapshot = inner.snapshot_rx.borrow().clone();
+                let root_uri = inner.root_uri.clone();
+                (snapshot, root_uri)
+            })
+            .await?;
 
-            // Clone the snapshot so we can refresh the current document with the latest on-disk content.
-            let mut docs = (*snapshot).clone();
-            if let Some(fresh) = reparse_document_from_disk(&current_uri) {
+        // Clone the snapshot so we can refresh the current document with the latest on-disk content.
+        let mut docs = (*snapshot).clone();
+
+        // Prefer the latest in-editor text (unsaved edits) for completions.
+        if let Some(text) = self
+            .documents_text
+            .read()
+            .await
+            .get(&current_uri)
+            .cloned()
+        {
+            if let Some(fresh) = parse_document_from_text_async(current_uri.clone(), text).await {
                 docs.insert(current_uri.clone(), fresh);
             }
+        } else if let Some(fresh) = reparse_document_from_disk_async(current_uri.clone()).await {
+            docs.insert(current_uri.clone(), fresh);
+        }
 
-            match &inner.root_uri {
-                Some(root_uri) => completion::completion(&docs, root_uri, &params),
-                None => completion::completion(&docs, &current_uri, &params),
-            }
-            .map(CompletionResponse::List)
-        })
-        .await
+        let list = match root_uri.as_ref() {
+            Some(root_uri) => completion::completion(&docs, root_uri, &params),
+            None => completion::completion(&docs, &current_uri, &params),
+        };
+
+        Ok(list.map(CompletionResponse::List))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -556,13 +596,39 @@ impl LanguageServer for Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri;
-        let text = self
+
+        tracing::debug!(uri = ?uri, "semantic tokens requested");
+
+        // Prefer the latest in-memory text from didOpen/didChange/didSave to avoid stale
+        // highlighting when the indexer snapshot lags behind fast edits.
+        if let Some(text) = self
+            .documents_text
+            .read()
+            .await
+            .get(&uri)
+            .cloned()
+        {
+            tracing::debug!(uri = ?uri, source = "memory", "semantic tokens resolved");
+            return Ok(semantic_tokens::semantic_tokens_full_from_text(text.as_str()));
+        }
+
+        // Prefer the latest on-disk content (async) so semantic tokens stay in sync even when the
+        // snapshot/indexer is slightly behind or the file changed externally.
+        if let Some(doc) = reparse_document_from_disk_async(uri.clone()).await {
+            tracing::debug!(uri = ?uri, source = "disk", "semantic tokens resolved");
+            return Ok(semantic_tokens::semantic_tokens_full(doc.as_ref()));
+        }
+
+        tracing::debug!(uri = ?uri, source = "snapshot", "semantic tokens resolved");
+
+        let doc = self
             .with_inner(|inner| {
                 let snapshot = inner.snapshot_rx.borrow().clone();
                 resolve_document_from_snapshot(snapshot.as_ref(), &uri)
             })
             .await?;
-        Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(doc.as_ref())))
+
+        Ok(doc.and_then(|doc| semantic_tokens::semantic_tokens_full(doc.as_ref())))
     }
 }
 

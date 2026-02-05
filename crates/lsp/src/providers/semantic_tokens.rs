@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::text::byte_to_lsp_position;
-use beancount_parser::ast;
+use beancount_parser::{ast, parse_lossy_with_rope};
 use ropey::Rope;
 use tower_lsp_server::ls_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
@@ -83,10 +83,18 @@ pub fn legend() -> SemanticTokensLegend {
 
 /// Compute semantic tokens from the parsed AST.
 pub fn semantic_tokens_full(doc: &crate::doc::Document) -> Option<SemanticTokensResult> {
-    let mut raw_tokens = Vec::with_capacity(doc.content().len() / 5);
+    semantic_tokens_from_parsed(doc.ast(), &doc.rope, doc.content().len())
+}
 
-    for directive in doc.ast() {
-        collect_directive_tokens(directive, &doc.rope, &mut raw_tokens);
+fn semantic_tokens_from_parsed(
+    directives: &[ast::Directive<'_>],
+    rope: &Rope,
+    content_len: usize,
+) -> Option<SemanticTokensResult> {
+    let mut raw_tokens = Vec::with_capacity(content_len / 5);
+
+    for directive in directives {
+        collect_directive_tokens(directive, rope, &mut raw_tokens);
     }
 
     if raw_tokens.is_empty() {
@@ -129,6 +137,15 @@ pub fn semantic_tokens_full(doc: &crate::doc::Document) -> Option<SemanticTokens
         result_id: None,
         data,
     }))
+}
+
+/// Compute semantic tokens directly from source text.
+///
+/// This is intended for the "highlight while typing" path: it avoids depending on the indexer
+/// snapshot (which can lag behind rapid edits) and doesn't require building a full `Document`.
+pub fn semantic_tokens_full_from_text(text: &str) -> Option<SemanticTokensResult> {
+    let (directives, rope) = parse_lossy_with_rope(text);
+    semantic_tokens_from_parsed(&directives, &rope, text.len())
 }
 
 fn collect_directive_tokens(
