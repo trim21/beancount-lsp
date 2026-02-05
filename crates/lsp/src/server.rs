@@ -12,13 +12,12 @@ use tower_lsp_server::jsonrpc::{Error, Result};
 use tower_lsp_server::ls_types::{
     CompletionOptions, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, MessageType, Position, Range,
-    SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions, SemanticTokensParams,
-    SemanticTokensResult, SemanticTokensServerCapabilities, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-    TextDocumentSyncSaveOptions, Uri as Url,
+    DidSaveTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType,
+    Position, Range, SaveOptions, SemanticTokensFullOptions, SemanticTokensOptions,
+    SemanticTokensParams, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri as Url,
 };
 use tower_lsp_server::{Client, LanguageServer};
 use tracing::info;
@@ -95,9 +94,11 @@ async fn reparse_document_from_disk_async(uri: Url) -> Option<Arc<Document>> {
 async fn parse_document_from_text_async(uri: Url, text: Arc<String>) -> Option<Arc<Document>> {
     let path: PathBuf = uri.to_file_path()?.to_path_buf();
 
-    task::spawn_blocking(move || Indexer::parse_document(text.as_str(), path.as_ref()).map(Arc::new))
-        .await
-        .ok()?
+    task::spawn_blocking(move || {
+        Indexer::parse_document(text.as_str(), path.as_ref()).map(Arc::new)
+    })
+    .await
+    .ok()?
 }
 
 pub type Document = crate::doc::Document;
@@ -524,13 +525,7 @@ impl LanguageServer for Backend {
         let mut docs = (*snapshot).clone();
 
         // Prefer the latest in-editor text (unsaved edits) for completions.
-        if let Some(text) = self
-            .documents_text
-            .read()
-            .await
-            .get(&current_uri)
-            .cloned()
-        {
+        if let Some(text) = self.documents_text.read().await.get(&current_uri).cloned() {
             if let Some(fresh) = parse_document_from_text_async(current_uri.clone(), text).await {
                 docs.insert(current_uri.clone(), fresh);
             }
@@ -601,15 +596,11 @@ impl LanguageServer for Backend {
 
         // Prefer the latest in-memory text from didOpen/didChange/didSave to avoid stale
         // highlighting when the indexer snapshot lags behind fast edits.
-        if let Some(text) = self
-            .documents_text
-            .read()
-            .await
-            .get(&uri)
-            .cloned()
-        {
+        if let Some(text) = self.documents_text.read().await.get(&uri).cloned() {
             tracing::debug!(uri = ?uri, source = "memory", "semantic tokens resolved");
-            return Ok(semantic_tokens::semantic_tokens_full_from_text(text.as_str()));
+            return Ok(semantic_tokens::semantic_tokens_full_from_text(
+                text.as_str(),
+            ));
         }
 
         // Prefer the latest on-disk content (async) so semantic tokens stay in sync even when the
