@@ -148,31 +148,141 @@ fn is_within_account_context(doc: &Document, byte_idx: usize) -> bool {
             .and_then(|idx| doc.directive_at_offset(idx))
     });
 
-    let directive = match directive {
-        Some(d) => d,
-        None => return false,
-    };
-
     match directive {
-        ast::Directive::Open(open) => span_contains(open.account.span),
-        ast::Directive::Balance(balance) => span_contains(balance.account.span),
-        ast::Directive::Pad(pad) => {
+        Some(ast::Directive::Open(open)) => span_contains(open.account.span),
+        Some(ast::Directive::Balance(balance)) => span_contains(balance.account.span),
+        Some(ast::Directive::Pad(pad)) => {
             span_contains(pad.account.span) || span_contains(pad.from_account.span)
         }
-        ast::Directive::Close(close) => span_contains(close.account.span),
-        ast::Directive::Transaction(tx) => {
+        Some(ast::Directive::Close(close)) => span_contains(close.account.span),
+        Some(ast::Directive::Transaction(tx)) => {
             tx.postings.iter().any(|p| span_contains(p.account.span))
         }
-        ast::Directive::Raw(_) => {
+        Some(ast::Directive::Raw(_raw)) => {
             let Some(position) = byte_to_lsp_position(&doc.rope, byte_idx) else {
                 return false;
             };
 
             // Try the account finder, which includes a text fallback for partial raw content.
-            account_at_position(doc, position).is_some()
+            if account_at_position(doc, position).is_some() {
+                return true;
+            }
+
+            // When the parser falls back to Raw directives, the cursor may still be inside a
+            // transaction body. In that case we still want to offer account completion.
+            is_in_transaction_body_line(doc, byte_idx)
         }
+        None => is_in_transaction_body_line(doc, byte_idx),
         _ => false,
     }
+}
+
+fn line_indent(doc: &Document, line: usize) -> Option<(usize, bool)> {
+    if line >= doc.rope.len_lines() {
+        return None;
+    }
+
+    let line_start = doc.rope.line_to_byte(line);
+    let line_end = if line + 1 < doc.rope.len_lines() {
+        doc.rope.line_to_byte(line + 1)
+    } else {
+        doc.rope.len_bytes()
+    };
+
+    let text = doc.rope.byte_slice(line_start..line_end).to_string();
+    let trimmed = text.trim_start();
+    let indent = text.len().saturating_sub(trimmed.len());
+    let is_empty = trimmed.trim().is_empty();
+    Some((indent, is_empty))
+}
+
+fn directive_starts_indented(doc: &Document, directive: &ast::Directive<'_>) -> bool {
+    let span = Document::directive_span(directive);
+    let Some(start_pos) = byte_to_lsp_position(&doc.rope, span.start) else {
+        return false;
+    };
+    let Ok(line) = usize::try_from(start_pos.line) else {
+        return false;
+    };
+    line_indent(doc, line)
+        .map(|(indent, _)| indent > 0)
+        .unwrap_or(false)
+}
+
+fn directive_index_before_line(doc: &Document, line: usize) -> Option<usize> {
+    let mut last_idx = None;
+    for (idx, directive) in doc.ast().iter().enumerate() {
+        let span = Document::directive_span(directive);
+        let Some(start_pos) = byte_to_lsp_position(&doc.rope, span.start) else {
+            continue;
+        };
+        let Ok(start_line) = usize::try_from(start_pos.line) else {
+            continue;
+        };
+
+        if start_line < line {
+            last_idx = Some(idx);
+        }
+    }
+    last_idx
+}
+
+fn is_in_transaction_body_line(doc: &Document, byte_idx: usize) -> bool {
+    let Some(position) = byte_to_lsp_position(&doc.rope, byte_idx) else {
+        return false;
+    };
+
+    let Ok(line) = usize::try_from(position.line) else {
+        return false;
+    };
+
+    // Only for indented lines.
+    let Some((indent, _is_empty)) = line_indent(doc, line) else {
+        return false;
+    };
+    if indent == 0 {
+        return false;
+    }
+
+    // The transaction header may be in a previous AST directive (Transaction), while the current
+    // line is a broken/empty posting line that might not belong to any directive span.
+    // Find the previous directive by line number and scan backwards.
+    let Some(idx) = directive_index_before_line(doc, line) else {
+        return false;
+    };
+
+    let directives = doc.ast();
+    for prev in directives[..=idx].iter().rev() {
+        match prev {
+            ast::Directive::Transaction(_) => return true,
+            // Indented raw/comment lines can be part of a transaction body; keep scanning.
+            ast::Directive::Raw(_) | ast::Directive::Comment(_) => {
+                if directive_starts_indented(doc, prev) {
+                    continue;
+                }
+                return false;
+            }
+            _ => return false,
+        }
+    }
+
+    false
+}
+
+fn is_probably_metadata_key(token: &str) -> bool {
+    // Beancount transaction metadata keys are typically like `foo:` (lowercase + trailing colon).
+    // We avoid treating those as account completion contexts.
+    if !token.ends_with(':') {
+        return false;
+    }
+
+    let key = &token[..token.len().saturating_sub(1)];
+    if key.is_empty() {
+        return false;
+    }
+
+    key.chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
 }
 
 fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
@@ -236,7 +346,7 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     }
 
     if in_account_context
-        && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, false)
+        && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, true)
     {
         // Avoid treating amount/price fields as accounts; require token to start alphabetic.
         let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
@@ -244,6 +354,12 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
         let token = doc.rope.byte_slice(token_start..token_end).to_string();
         if indent > 0 && range.start.character != u32::try_from(indent).ok()? {
             return None;
+        }
+        if is_probably_metadata_key(token.trim()) {
+            return None;
+        }
+        if token.is_empty() {
+            return Some(CompletionMode::Account { prefix, range });
         }
         if token
             .chars()
@@ -328,11 +444,7 @@ pub fn completion(
         } => {
             let mut accounts = HashSet::new();
             for (_, doc) in documents_bfs(documents, root_uri) {
-                for dir in &doc.directives {
-                    if let core::CoreDirective::Open(o) = dir {
-                        accounts.insert(o.account.clone());
-                    }
-                }
+                accounts.extend(doc.accounts.iter().cloned());
             }
 
             accounts
@@ -405,7 +517,7 @@ pub fn completion(
         None
     } else {
         Some(CompletionList {
-            is_incomplete: false,
+            is_incomplete: true,
             items,
         })
     }
@@ -779,6 +891,156 @@ mod tests {
         assert!(
             response.is_none(),
             "expected no account completion after posting account"
+        );
+    }
+
+    #[test]
+    fn completes_account_after_unicode_payee() {
+        let lines = [
+            r#"2026-01-01 open Expenses:Rent USD   "#,
+            r#"2026-01-05 *                        "#,
+            r#"  Expenses:R|                       "#,
+            r#"  Assets:Cash           -1.00 CNY   "#,
+        ];
+        let (tx_doc, position) = doc_with_cursor(&lines);
+        let tx_uri = Url::from_str("file:///txn-unicode-payee.bean").unwrap();
+
+        let mut documents = HashMap::new();
+        documents.insert(tx_uri.clone(), tx_doc);
+
+        let ctx = determine_completion_context(documents.get(&tx_uri).unwrap().as_ref(), position);
+        assert!(
+            matches!(ctx, Some(CompletionMode::Account { .. })),
+            "expected account completion context",
+        );
+
+        let mut accounts = HashSet::new();
+        let doc = documents.get(&tx_uri).unwrap();
+        accounts.extend(doc.accounts.iter().cloned());
+        assert!(
+            accounts.contains("Expenses:Rent"),
+            "expected account set to include Expenses:Rent",
+        );
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: tx_uri.clone(),
+                },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let items = completion_items(completion(&documents, &tx_uri, &params));
+        assert!(
+            items.iter().any(|i| i.label == "Expenses:Rent"),
+            "expected account completion after unicode payee",
+        );
+    }
+
+    #[test]
+    fn completes_account_on_empty_posting_line_in_raw_transaction() {
+        let lines = [
+            r#"2026-01-16 * "" """#,
+            r#"  Expenses:Food                          -1 CNY"#,
+            r#"  |"#,
+        ];
+        let (doc, position) = doc_with_cursor(&lines);
+        let uri = Url::from_str("file:///raw-tx-empty-posting.bean").unwrap();
+
+        let mut documents = HashMap::new();
+        documents.insert(uri.clone(), doc);
+
+        let doc = documents.get(&uri).unwrap();
+        assert!(
+            doc.ast()
+                .iter()
+                .any(|d| matches!(d, ast::Directive::Transaction(_))),
+            "expected the transaction header to parse as Transaction",
+        );
+
+        let ctx = determine_completion_context(doc.as_ref(), position);
+        assert!(
+            matches!(ctx, Some(CompletionMode::Account { .. })),
+            "expected account completion context on empty posting line",
+        );
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let items = completion_items(completion(&documents, &uri, &params));
+        assert!(
+            items.iter().any(|i| i.label == "Expenses:Food"),
+            "expected account completion to include Expenses:Food",
+        );
+    }
+
+    #[test]
+    fn completes_in_transaction_body() {
+        let lines = [
+            r#"2026-01-16 open Expenses:Food CNY"#,
+            r#""#,
+            r#"2026-01-16 *"#,
+            r#"  Liabilities:C1                        -1.00 CNY"#,
+            r#"  Expenses:Food"#,
+            r#""#,
+            r#"2026-01-16 *"#,
+            r#"  Liabilities:C1                          -1.00 CNY"#,
+            r#"  e|                       "#,
+            r#""#,
+            r#"2026-01-16 *"#,
+            r#"  Expenses:Food"#,
+            r#"  Liabilities:C1"#,
+        ];
+        let (doc, position) = doc_with_cursor(&lines);
+        let uri = Url::from_str("file:///tx-body.bean").unwrap();
+
+        let mut documents = HashMap::new();
+        documents.insert(uri.clone(), doc);
+
+        let doc = documents.get(&uri).unwrap();
+        let ctx = determine_completion_context(doc.as_ref(), position);
+
+        match ctx {
+            Some(CompletionMode::Account { prefix, .. }) => {
+                assert_eq!(prefix, "e");
+            }
+            _ => panic!("expected account completion in transaction body",),
+        };
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: Some(CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+
+        let items = completion_items(completion(&documents, &uri, &params));
+        assert!(
+            items.iter().any(|i| i.label == "Expenses:Food"),
+            "expected completion to suggest Expenses:Food",
         );
     }
 

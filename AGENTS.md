@@ -51,7 +51,7 @@ let example: String = lines((
 
 ```
 
-And in rust, the `"` inside a raw string doesn't need to be escaped.
+And in rust, the `"` inside a raw string (`r#"..."#`) doesn't need to be escaped.
 
 ## Gotcha
 

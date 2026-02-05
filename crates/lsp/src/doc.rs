@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use beancount_parser::{ast, core, parse_lossy_with_rope};
@@ -39,6 +39,7 @@ pub struct Document {
     ast: Vec<ast::Directive<'static>>,
     pub directives: Vec<core::CoreDirective>,
     pub includes: Vec<String>,
+    pub accounts: HashSet<String>,
     pub rope: Rope,
 }
 
@@ -121,6 +122,12 @@ pub fn build_document(text: String, filename: &str) -> Option<Document> {
         })
         .collect();
 
+    // Prefer normalized directives (more accurate).
+    //
+    // Note: completion may choose to apply additional heuristics for partially-edited/broken
+    // documents; other LSP features can assume the document snapshot is valid.
+    let accounts = collect_accounts(&directives);
+
     let ast = unsafe {
         std::mem::transmute::<Vec<ast::Directive<'_>>, Vec<ast::Directive<'static>>>(ast)
     };
@@ -130,6 +137,41 @@ pub fn build_document(text: String, filename: &str) -> Option<Document> {
         ast,
         directives,
         includes,
+        accounts,
         rope,
     })
+}
+
+fn collect_accounts(directives: &[core::CoreDirective]) -> HashSet<String> {
+    let mut accounts = HashSet::new();
+
+    for directive in directives {
+        match directive {
+            core::CoreDirective::Open(open) => insert_account(&mut accounts, &open.account),
+            core::CoreDirective::Balance(balance) => {
+                insert_account(&mut accounts, &balance.account)
+            }
+            core::CoreDirective::Pad(pad) => {
+                insert_account(&mut accounts, &pad.account);
+                insert_account(&mut accounts, &pad.from_account);
+            }
+            core::CoreDirective::Close(close) => insert_account(&mut accounts, &close.account),
+            core::CoreDirective::Transaction(tx) => {
+                for posting in &tx.postings {
+                    insert_account(&mut accounts, &posting.account);
+                }
+            }
+            core::CoreDirective::Note(note) => insert_account(&mut accounts, &note.account),
+            core::CoreDirective::Document(doc) => insert_account(&mut accounts, &doc.account),
+            _ => {}
+        }
+    }
+
+    accounts
+}
+
+fn insert_account(accounts: &mut HashSet<String>, account: &str) {
+    if !account.is_empty() {
+        accounts.insert(account.to_owned());
+    }
 }

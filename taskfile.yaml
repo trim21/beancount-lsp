@@ -4,9 +4,9 @@ tasks:
   build:lsp:
     desc: Build Rust LSP crate
     cmds:
-      - cargo build -p beancount-lsp
+      - cargo build -p beancount-lsp --release
 
-  test:lsp:
+  test:
     desc: Test Rust LSP crate
     cmds:
       - cargo nextest run -p beancount-lsp

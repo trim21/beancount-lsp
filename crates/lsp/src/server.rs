@@ -81,6 +81,12 @@ fn resolve_document_from_snapshot(
     Indexer::parse_document(&content, path.as_ref()).map(Arc::new)
 }
 
+fn reparse_document_from_disk(uri: &Url) -> Option<Arc<Document>> {
+    let path = uri.to_file_path()?;
+    let content = fs::read_to_string(path.as_ref()).ok()?;
+    Indexer::parse_document(&content, path.as_ref()).map(Arc::new)
+}
+
 pub type Document = crate::doc::Document;
 pub(crate) use crate::doc::find_document;
 
@@ -375,6 +381,7 @@ impl LanguageServer for Backend {
             };
 
             let initial_snapshot = Arc::new(indexer.documents().clone());
+            log_collected_accounts(&initial_snapshot);
             let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
 
             *guard = Some(InnerBackend {
@@ -483,14 +490,16 @@ impl LanguageServer for Backend {
 
         self.with_inner(|inner| {
             let snapshot = inner.snapshot_rx.borrow().clone();
+
+            // Clone the snapshot so we can refresh the current document with the latest on-disk content.
+            let mut docs = (*snapshot).clone();
+            if let Some(fresh) = reparse_document_from_disk(&current_uri) {
+                docs.insert(current_uri.clone(), fresh);
+            }
+
             match &inner.root_uri {
-                Some(root_uri) => completion::completion(snapshot.as_ref(), root_uri, &params),
-                None => {
-                    let doc = resolve_document_from_snapshot(snapshot.as_ref(), &current_uri)?;
-                    let mut docs = HashMap::new();
-                    docs.insert(current_uri.clone(), doc);
-                    completion::completion(&docs, &current_uri, &params)
-                }
+                Some(root_uri) => completion::completion(&docs, root_uri, &params),
+                None => completion::completion(&docs, &current_uri, &params),
             }
             .map(CompletionResponse::List)
         })
@@ -555,6 +564,17 @@ impl LanguageServer for Backend {
             .await?;
         Ok(text.and_then(|doc| semantic_tokens::semantic_tokens_full(doc.as_ref())))
     }
+}
+
+fn log_collected_accounts(docs: &HashMap<Url, Arc<Document>>) {
+    let mut accounts: HashSet<String> = HashSet::new();
+    for doc in docs.values() {
+        accounts.extend(doc.accounts.iter().cloned());
+    }
+
+    tracing::info!(count = accounts.len(), "collected accounts at init");
+    // Keep the full list at debug level to avoid noisy info logs.
+    tracing::info!(accounts = ?accounts);
 }
 
 #[cfg(test)]
