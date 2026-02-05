@@ -66,6 +66,7 @@ mod tests {
     use super::*;
     use crate::doc;
     use crate::providers::account::account_at_position;
+    use crate::test_utils::lines;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
         Position, TextDocumentIdentifier, TextDocumentPositionParams,
@@ -78,8 +79,11 @@ mod tests {
     #[test]
     fn hover_shows_account_notes() {
         let uri = Url::from_str("file:///hover.bean").unwrap();
-        let content = "2023-01-01 open Assets:Cash\n2023-02-01 note Assets:Cash \"First note\"\n";
-        let doc = build_doc(&uri, content);
+        let content = lines(&[
+            r#"2023-01-01 open Assets:Cash"#,
+            r#"2023-02-01 note Assets:Cash "First note""#,
+        ]);
+        let doc = build_doc(&uri, &content);
 
         let mut docs = HashMap::new();
         docs.insert(uri.clone(), doc);

@@ -57,6 +57,7 @@ pub fn goto_definition(
 mod tests {
     use super::*;
     use crate::doc;
+    use crate::test_utils::lines;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
         Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri as Url,
@@ -69,12 +70,15 @@ mod tests {
     #[test]
     fn goto_definition_returns_open_locations() {
         let open_uri = Url::from_str("file:///open.bean").unwrap();
-        let open_content = "2023-01-01 open Assets:Cash\n";
-        let open_doc = build_doc(&open_uri, open_content);
+        let open_content = lines(&[r#"2023-01-01 open Assets:Cash"#]);
+        let open_doc = build_doc(&open_uri, &open_content);
 
         let txn_uri = Url::from_str("file:///txn.bean").unwrap();
-        let txn_content = "2023-02-01 txn \"\" \"\"\n  Assets:Cash 1 USD\n";
-        let txn_doc = build_doc(&txn_uri, txn_content);
+        let txn_content = lines(&[
+            "2023-02-01 txn \"\" \"\"",
+            "  Assets:Cash 1 USD",
+        ]);
+        let txn_doc = build_doc(&txn_uri, &txn_content);
 
         let mut docs = HashMap::new();
         docs.insert(open_uri.clone(), open_doc);

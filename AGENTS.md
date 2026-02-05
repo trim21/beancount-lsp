@@ -36,6 +36,22 @@ This is a **beancount language server** implementation written in Rust that prov
 - Keep file paths ASCII-friendly; diagnostics and parser calls derive filenames from URIs.
 - Avoid global installs; use the repo-local `.venv` and `uv` for Python tooling. but if there is already some tools in global PATH, for example, user installed `matruin`, you should avoid install it again in local env.
 
+## Code style
+
+when you are add beancount testing case , you should use raw string and join to make it more readable. for example:
+
+```
+let example: String = lines((
+    r#"2022-01-01 * "..." "..." #food  "#,
+    r#"  Assets:Cash -10 USD           "#,
+    r#"  Expenses:Food                 "#,
+    r#"2022-01-02 * "..." "..." #      "#,
+    r#"  Expenses:Food                 "#,
+));
+
+```
+
+And in rust, the `"` inside a raw string doesn't need to be escaped.
 
 ## Gotcha
 

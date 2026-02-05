@@ -11,6 +11,8 @@ mod providers;
 pub use crate::providers::account::account_at_position;
 mod server;
 mod text;
+#[cfg(test)]
+pub mod test_utils;
 
 use clap::{Parser, ValueEnum, error::ErrorKind as ClapErrorKind};
 use server::Backend;
