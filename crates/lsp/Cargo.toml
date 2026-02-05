@@ -15,7 +15,7 @@ anyhow = "1.0.100"
 beancount-parser = { workspace = true }
 clap = { version = "4.5.56", features = ["derive"] }
 glob = "0.3.3"
-lru = "0.12.4"
+lru = "0.16.0"
 pyo3 = { version = "0.28.0", features = ["auto-initialize", "abi3-py310", "generate-import-lib"], optional = true }
 ropey = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }
