@@ -186,20 +186,10 @@ fn collect_directive_tokens(
             push_opt_with_span(content, &tx.payee, TokenKind::String, out);
             push_opt_with_span(content, &tx.narration, TokenKind::String, out);
 
-            if let Some(tags_links) = &tx.tags_links {
-                push_tags(content, tags_links, out);
-            }
-
             push_tags(content, &tx.tags, out);
             push_tags(content, &tx.links, out);
 
             push_opt_with_span(content, &tx.comment, TokenKind::Comment, out);
-            for tagged in &tx.tags_links_lines {
-                push_with_span(content, tagged, TokenKind::Parameter, out);
-            }
-            for comment in &tx.comments {
-                push_with_span(content, comment, TokenKind::Comment, out);
-            }
 
             collect_key_values(content, &tx.key_values, out);
 
@@ -670,8 +660,6 @@ popmeta foo:
 
     #[test]
     fn semantic_tokens_snapshot() {
-        beancount_parser::parse_str_with_rope(SAMPLE);
-
         let doc = crate::doc::build_document(SAMPLE.to_owned(), "snapshot.bean").unwrap();
 
         let result = semantic_tokens_full(&doc).expect("tokens");

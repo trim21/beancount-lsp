@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use beancount_parser::{ast, core, parse_str_with_rope};
+use beancount_parser::{ast, core, parse_lossy_with_rope};
 use ropey::Rope;
 use tower_lsp_server::ls_types::Uri as Url;
 
@@ -107,7 +107,7 @@ impl Document {
 ///
 /// This keeps the backing string pinned and stores an AST that borrows from it.
 pub fn build_document(text: String, filename: &str) -> Option<Document> {
-    let (ast, rope) = parse_str_with_rope(&text);
+    let (ast, rope) = parse_lossy_with_rope(&text);
 
     let directives = core::normalize_directives_with_rope(&ast, filename, &rope)
         .ok()

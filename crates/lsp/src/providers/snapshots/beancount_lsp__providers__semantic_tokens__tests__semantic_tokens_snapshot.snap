@@ -66,6 +66,12 @@ expression: actual
 17:14 len=4 type=keyword
 18:0 len=7 type=function
 18:8 len=3 type=keyword
+19:0 len=10 type=number
+19:11 len=1 type=function
+19:13 len=7 type=string
+19:21 len=11 type=string
+19:34 len=3 type=parameter
+19:39 len=4 type=parameter
 23:0 len=10 type=number
 23:11 len=1 type=function
 23:11 len=1 type=keyword
