@@ -1,8 +1,9 @@
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn generate_sample() -> &'static str {
     static SAMPLE: OnceLock<String> = OnceLock::new();
