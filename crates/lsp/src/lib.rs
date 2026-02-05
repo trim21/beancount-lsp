@@ -10,9 +10,9 @@ pub use crate::doc::{Document, build_document};
 mod providers;
 pub use crate::providers::account::account_at_position;
 mod server;
-mod text;
 #[cfg(test)]
 pub mod test_utils;
+mod text;
 
 use clap::{Parser, ValueEnum, error::ErrorKind as ClapErrorKind};
 use server::Backend;

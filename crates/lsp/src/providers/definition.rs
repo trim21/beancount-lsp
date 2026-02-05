@@ -74,10 +74,7 @@ mod tests {
         let open_doc = build_doc(&open_uri, &open_content);
 
         let txn_uri = Url::from_str("file:///txn.bean").unwrap();
-        let txn_content = lines(&[
-            "2023-02-01 txn \"\" \"\"",
-            "  Assets:Cash 1 USD",
-        ]);
+        let txn_content = lines(&["2023-02-01 txn \"\" \"\"", "  Assets:Cash 1 USD"]);
         let txn_doc = build_doc(&txn_uri, &txn_content);
 
         let mut docs = HashMap::new();
