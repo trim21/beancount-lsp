@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use tower_lsp_server::ls_types::Uri as Url;
 
 fn generate_sample() -> &'static str {
