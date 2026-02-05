@@ -9,7 +9,7 @@ tasks:
   test:lsp:
     desc: Test Rust LSP crate
     cmds:
-      - cargo test -p beancount-lsp
+      - cargo nextest run -p beancount-lsp
 
   build:lsp-py:
     desc: Build Python extension via maturin (uses project-local uv env)

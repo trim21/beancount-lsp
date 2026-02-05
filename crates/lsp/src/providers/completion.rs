@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use beancount_parser::core;
-use beancount_tree_sitter::{NodeKind, tree_sitter};
+use beancount_parser::{ast, core};
 use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, CompletionList, CompletionParams, CompletionTextEdit,
     Position, Range, TextEdit, Uri as Url,
 };
 
+use crate::providers::account::account_at_position;
 use crate::server::{Document, documents_bfs, find_document};
-use crate::text::{byte_to_lsp_position, lsp_position_to_byte, lsp_position_to_ts_point};
+use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
 const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note", "price"];
 const ROOT_KEYWORDS: &[&str] = &[
@@ -140,42 +140,39 @@ fn tag_prefix_at_position(doc: &Document, position: Position) -> Option<(String,
     ))
 }
 
-fn is_within_kind(doc: &Document, position: Position, target: NodeKind) -> bool {
-    let Some(point) = lsp_position_to_ts_point(&doc.rope, position) else {
-        return false;
+fn is_within_account_context(doc: &Document, byte_idx: usize) -> bool {
+    let span_contains = |span: ast::Span| span.start <= byte_idx && byte_idx <= span.end;
+    let directive = doc.directive_at_offset(byte_idx).or_else(|| {
+        byte_idx
+            .checked_sub(1)
+            .and_then(|idx| doc.directive_at_offset(idx))
+    });
+
+    let directive = match directive {
+        Some(d) => d,
+        None => return false,
     };
 
-    let root = doc.tree.root_node();
-
-    let check_point = |p: tree_sitter::Point| {
-        let node = root
-            .named_descendant_for_point_range(p, p)
-            .or_else(|| root.descendant_for_point_range(p, p));
-
-        let mut current = node;
-        while let Some(node) = current {
-            if NodeKind::from(node.kind()) == target {
-                return true;
-            }
-            current = node.parent();
+    match directive {
+        ast::Directive::Open(open) => span_contains(open.account.span),
+        ast::Directive::Balance(balance) => span_contains(balance.account.span),
+        ast::Directive::Pad(pad) => {
+            span_contains(pad.account.span) || span_contains(pad.from_account.span)
         }
+        ast::Directive::Close(close) => span_contains(close.account.span),
+        ast::Directive::Transaction(tx) => {
+            tx.postings.iter().any(|p| span_contains(p.account.span))
+        }
+        ast::Directive::Raw(_) => {
+            let Some(position) = byte_to_lsp_position(&doc.rope, byte_idx) else {
+                return false;
+            };
 
-        false
-    };
-
-    if check_point(point) {
-        return true;
+            // Try the account finder, which includes a text fallback for partial raw content.
+            account_at_position(doc, position).is_some()
+        }
+        _ => false,
     }
-
-    if point.column > 0 {
-        let query_point = tree_sitter::Point {
-            row: point.row,
-            column: point.column.saturating_sub(1),
-        };
-        return check_point(query_point);
-    }
-
-    false
 }
 
 fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
@@ -228,60 +225,17 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     let trimmed = line_slice.trim_start();
     let indent = line_slice.len().saturating_sub(trimmed.len());
 
-    let in_account_node = is_within_kind(doc, position, NodeKind::Account);
-    let in_tag_node = is_within_kind(doc, position, NodeKind::Tag);
+    let in_account_context = is_within_account_context(doc, cursor_byte);
 
     if indent == 0
         && has_date_prefix(&line_slice, indent)
-        && !in_account_node
+        && !in_account_context
         && let Some((prefix, range)) = tag_prefix_at_position(doc, position)
     {
         return Some(CompletionMode::Tag { prefix, range });
     }
 
-    // Prefer a tree-based context: walk ancestors to see if we're in posting/open/balance.
-    let mut allow_account = false;
-    if in_account_node {
-        allow_account = true;
-    } else if let Some(point) = lsp_position_to_ts_point(&doc.rope, position) {
-        let query_point = tree_sitter::Point {
-            row: point.row,
-            column: point.column.saturating_sub(1),
-        };
-        let root = doc.tree.root_node();
-        if let Some(mut node) = root
-            .named_descendant_for_point_range(query_point, point)
-            .or_else(|| root.descendant_for_point_range(query_point, point))
-        {
-            loop {
-                let kind = NodeKind::from(node.kind());
-                if matches!(kind, NodeKind::Open | NodeKind::Balance) || node.kind() == "posting" {
-                    allow_account = true;
-                    break;
-                }
-
-                if let Some(parent) = node.parent() {
-                    node = parent;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    // Fallback heuristic: indented posting line or account-taking directives (open/balance).
-    if !allow_account {
-        allow_account = if indent > 0 {
-            true
-        } else {
-            let mut parts = trimmed.split_whitespace();
-            let first = parts.next();
-            let second = parts.next();
-            first.is_some() && matches!(second, Some("open") | Some("balance"))
-        };
-    }
-
-    if allow_account
+    if in_account_context
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, false)
     {
         // Avoid treating amount/price fields as accounts; require token to start alphabetic.
@@ -304,8 +258,7 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     if indent == 0
         && has_date_prefix(&line_slice, indent)
         && rel >= indent + 10
-        && !in_account_node
-        && !in_tag_node
+        && !in_account_context
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
         && DATE_KEYWORDS
             .iter()
@@ -319,8 +272,7 @@ fn determine_completion_context(doc: &Document, position: Position) -> Option<Co
     }
 
     if indent == 0
-        && !in_account_node
-        && !in_tag_node
+        && !in_account_context
         && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
         && ROOT_KEYWORDS
             .iter()
@@ -430,30 +382,6 @@ pub fn completion(
                         }
                     }
                 }
-
-                if tags.is_empty() {
-                    let root = doc.tree.root_node();
-                    let mut stack = vec![root];
-                    while let Some(node) = stack.pop() {
-                        if NodeKind::from(node.kind()) == NodeKind::Tag {
-                            let text = doc
-                                .rope
-                                .byte_slice(node.start_byte()..node.end_byte())
-                                .to_string();
-                            if let Some(stripped) = text.strip_prefix('#')
-                                && !stripped.is_empty()
-                            {
-                                tags.insert(stripped.to_string());
-                            }
-                        }
-
-                        for idx in (0..node.child_count()).rev() {
-                            if let Some(child) = node.child(u32::try_from(idx).unwrap()) {
-                                stack.push(child);
-                            }
-                        }
-                    }
-                }
             }
 
             tags.into_iter()
@@ -486,8 +414,7 @@ pub fn completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
+    use crate::doc;
     use std::collections::HashSet;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
@@ -518,24 +445,10 @@ mod tests {
         let cursor = cursor.expect("cursor marker '|' not found");
         let content = content_lines.join("\n");
 
-        let _uri = Url::from_str("file:///completion-helper.bean").unwrap();
-        let directives = Vec::new();
-        let includes = Vec::new();
-        let rope = ropey::Rope::from_str(&content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(&content, None).unwrap();
+        let uri = Url::from_str("file:///completion-helper.bean").unwrap();
+        let doc = doc::build_document(content, uri.as_str()).expect("build doc");
 
-        (
-            Arc::new(Document {
-                directives,
-                includes,
-                content,
-                rope,
-                tree,
-            }),
-            cursor,
-        )
+        (Arc::new(doc), cursor)
     }
 
     fn determine_context_helper(lines: &[&str]) -> Option<CompletionMode> {
@@ -559,26 +472,7 @@ mod tests {
     }
 
     fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let includes = directives
-            .iter()
-            .filter_map(|directive| match directive {
-                core::CoreDirective::Include(include) => Some(include.filename.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Arc::new(Document {
-            directives,
-            includes,
-            content: content.to_owned(),
-            rope,
-            tree,
-        })
+        Arc::new(doc::build_document(content.to_string(), uri.as_str()).expect("build doc"))
     }
 
     #[test]
@@ -855,6 +749,8 @@ mod tests {
         let open_uri = Url::from_str("file:///open.bean").unwrap();
         let open_content = "2020-01-01 open Assets:Cash\n";
         let open_doc = build_doc(&open_uri, open_content);
+
+        assert!(matches!(open_doc.ast()[0], ast::Directive::Open(_)));
 
         let lines = [r#"2022-01-02 * "..." "...""#, r#"  Expenses:Food a|"#];
         let (tx_doc, position) = doc_with_cursor(&lines);

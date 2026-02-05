@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use beancount_tree_sitter::{NodeKind, tree_sitter};
-use ropey::Rope;
+use beancount_parser::ast;
 use tower_lsp_server::ls_types::{
-    GotoDefinitionParams, GotoDefinitionResponse, Location, Range, Uri as Url,
+    GotoDefinitionParams, GotoDefinitionResponse, Location, Uri as Url,
 };
 
 use crate::providers::account::account_at_position;
 use crate::server::{Document, documents_bfs, find_document};
-use crate::text::ts_point_to_lsp_position;
+use crate::text::byte_span_to_lsp_range;
 
 fn collect_open_definitions(
     doc: &Document,
@@ -17,43 +16,17 @@ fn collect_open_definitions(
     account: &str,
     locations: &mut Vec<Location>,
 ) {
-    let rope = &doc.rope;
-    collect_nodes(doc.tree.root_node(), rope, uri, account, locations);
-}
-
-fn collect_nodes(
-    node: tree_sitter::Node,
-    rope: &Rope,
-    uri: &Url,
-    account: &str,
-    out: &mut Vec<Location>,
-) {
-    if NodeKind::from(node.kind()) == NodeKind::Account
-        && let Some(parent) = node.parent()
-        && NodeKind::from(parent.kind()) == NodeKind::Open
-    {
-        let text = rope
-            .byte_slice(node.start_byte()..node.end_byte())
-            .to_string()
-            .trim()
-            .to_owned();
-
-        if text == account
-            && let (Some(start), Some(end)) = (
-                ts_point_to_lsp_position(rope, node.start_position()),
-                ts_point_to_lsp_position(rope, node.end_position()),
-            )
+    for directive in doc.ast() {
+        if let ast::Directive::Open(open) = directive
+            && open.account.content == account
+            && let Some(range) =
+                byte_span_to_lsp_range(&doc.rope, open.account.span.start, open.account.span.end)
         {
-            out.push(Location {
+            locations.push(Location {
                 uri: uri.clone(),
-                range: Range { start, end },
+                range,
             });
         }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_nodes(child, rope, uri, account, out);
     }
 }
 
@@ -83,45 +56,26 @@ pub fn goto_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
+    use crate::doc;
+    use crate::test_utils::lines;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
         Position, TextDocumentIdentifier, TextDocumentPositionParams, Uri as Url,
     };
 
     fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let includes = directives
-            .iter()
-            .filter_map(|directive| match directive {
-                core::CoreDirective::Include(include) => Some(include.filename.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Arc::new(Document {
-            directives,
-            includes,
-            content: content.to_owned(),
-            rope,
-            tree,
-        })
+        Arc::new(doc::build_document(content.to_string(), uri.as_str()).expect("build doc"))
     }
 
     #[test]
     fn goto_definition_returns_open_locations() {
         let open_uri = Url::from_str("file:///open.bean").unwrap();
-        let open_content = "2023-01-01 open Assets:Cash\n";
-        let open_doc = build_doc(&open_uri, open_content);
+        let open_content = lines(&[r#"2023-01-01 open Assets:Cash"#]);
+        let open_doc = build_doc(&open_uri, &open_content);
 
         let txn_uri = Url::from_str("file:///txn.bean").unwrap();
-        let txn_content = "2023-02-01 txn \"\" \"\"\n  Assets:Cash 1 USD\n";
-        let txn_doc = build_doc(&txn_uri, txn_content);
+        let txn_content = lines(&["2023-02-01 txn \"\" \"\"", "  Assets:Cash 1 USD"]);
+        let txn_doc = build_doc(&txn_uri, &txn_content);
 
         let mut docs = HashMap::new();
         docs.insert(open_uri.clone(), open_doc);

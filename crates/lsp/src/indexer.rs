@@ -3,17 +3,14 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Result as AnyResult, anyhow};
-use beancount_parser::{core, parse};
-use beancount_tree_sitter::{language, tree_sitter};
 use glob::glob;
 use lru::LruCache;
-use ropey::Rope;
 use tower_lsp_server::ls_types::Uri as Url;
 
-use crate::server::Document;
+use crate::doc::{self, Document};
 
 pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
     fn strip_windows_verbatim_prefix(path: &Path) -> PathBuf {
@@ -45,7 +42,7 @@ pub struct Indexer {
     ref_counts: HashMap<Url, usize>,
     root: Option<Url>,
     file_cache: LruCache<String, CacheEntry>,
-    updates_since_gc: usize,
+    last_gc: Instant,
 }
 
 #[derive(Clone)]
@@ -73,7 +70,7 @@ impl Indexer {
             file_cache: LruCache::new(
                 NonZeroUsize::new(Self::FILE_CACHE_CAPACITY).expect("file cache capacity"),
             ),
-            updates_since_gc: 0,
+            last_gc: Instant::now(),
         }
     }
 
@@ -506,13 +503,13 @@ impl Indexer {
     }
 
     fn maybe_run_gc(&mut self) {
-        self.updates_since_gc = self.updates_since_gc.saturating_add(1);
-        if self.updates_since_gc < 1024 {
+        let elapsed = self.last_gc.elapsed();
+        if elapsed < Duration::from_secs(600) {
             return;
         }
 
         self.run_gc();
-        self.updates_since_gc = 0;
+        self.last_gc = Instant::now();
     }
 
     fn url_normalized_key(url: &Url) -> Option<String> {
@@ -521,20 +518,6 @@ impl Indexer {
     }
 
     pub fn parse_document(text: &str, filename: &Path) -> Option<Document> {
-        let content = text.to_owned();
-
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).ok()?;
-        let tree = parser.parse(&content, None)?;
-
-        // Tree-sitter can still produce a tree for partially invalid input; keep that so
-        // providers and the checker see the latest text even when the beancount parser fails.
-        let filename_str = filename.to_string_lossy().into_owned();
-        let directives = parse::parse_directives(tree.root_node(), &content, filename_str)
-            .ok()
-            .and_then(|ast| core::normalize_directives(ast).ok())
-            .unwrap_or_default();
-
         let base_path = match filename.parent() {
             Some(parent) => parent,
             None => {
@@ -543,58 +526,53 @@ impl Indexer {
             }
         };
 
-        let mut includes = Vec::new();
-        for directive in &directives {
-            if let core::CoreDirective::Include(include) = directive {
-                let resolved = Self::resolve_include_path(base_path, &include.filename);
-                let resolved_str = resolved.to_string_lossy();
-                if let Some(pattern) = Self::glob_pattern_if_any(&resolved_str) {
-                    match glob(&pattern) {
-                        Ok(entries) => {
-                            for entry in entries {
-                                match entry {
-                                    Ok(entry) => {
-                                        if entry.is_file() {
-                                            includes.push(entry.to_string_lossy().to_string());
-                                        }
+        let mut doc = doc::build_document(text.to_owned(), &filename.to_string_lossy())?;
+
+        let mut expanded_includes = Vec::new();
+        for include in &doc.includes {
+            let resolved = Self::resolve_include_path(base_path, include);
+            let resolved_str = resolved.to_string_lossy();
+            if let Some(pattern) = Self::glob_pattern_if_any(&resolved_str) {
+                match glob(&pattern) {
+                    Ok(entries) => {
+                        for entry in entries {
+                            match entry {
+                                Ok(entry) => {
+                                    if entry.is_file() {
+                                        expanded_includes.push(entry.to_string_lossy().to_string());
                                     }
-                                    Err(err) => {
-                                        tracing::warn!(
-                                            base_file = %base_path.display(),
-                                            include = %include.filename,
-                                            pattern = %pattern,
-                                            error = %err,
-                                            "failed to expand include glob entry"
-                                        );
-                                    }
+                                }
+                                Err(err) => {
+                                    tracing::warn!(
+                                        base_file = %base_path.display(),
+                                        include = %include,
+                                        pattern = %pattern,
+                                        error = %err,
+                                        "failed to expand include glob entry"
+                                    );
                                 }
                             }
                         }
-                        Err(err) => {
-                            tracing::warn!(
-                                base_file = %base_path.display(),
-                                include = %include.filename,
-                                pattern = %pattern,
-                                error = %err,
-                                "failed to expand include glob"
-                            );
-                        }
                     }
-                    continue;
+                    Err(err) => {
+                        tracing::warn!(
+                            base_file = %base_path.display(),
+                            include = %include,
+                            pattern = %pattern,
+                            error = %err,
+                            "failed to expand include glob"
+                        );
+                    }
                 }
-
-                includes.push(resolved_str.to_string());
+                continue;
             }
+
+            expanded_includes.push(resolved_str.to_string());
         }
 
-        let rope = Rope::from_str(&content);
-        Some(Document {
-            directives,
-            includes,
-            content,
-            rope,
-            tree,
-        })
+        doc.includes = expanded_includes;
+
+        Some(doc)
     }
 
     pub(crate) fn parse_document_for_bench(text: &str, filename: &Path) {

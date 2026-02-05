@@ -13,7 +13,6 @@ pyo3 = ["dep:pyo3"]
 [dependencies]
 anyhow = "1.0.100"
 beancount-parser = { workspace = true }
-beancount-tree-sitter = { workspace = true }
 clap = { version = "4.5.56", features = ["derive"] }
 glob = "0.3.3"
 lru = "0.12.4"
@@ -28,8 +27,13 @@ tracing-subscriber = { version = "0.3.22", features = ["fmt"] }
 
 [dev-dependencies]
 criterion = "0.5.1"
+insta = { version = "1.39.0", features = ["glob"] }
 tempfile = "3.24.0"
 
 [[bench]]
 name = "parse_document"
+harness = false
+
+[[bench]]
+name = "semantic_tokens"
 harness = false

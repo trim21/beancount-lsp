@@ -1,4 +1,4 @@
-exclude: '.*/__snapshots__/.*'
+exclude: '.*/snapshots/.*'
 
 repos:
   - repo: https://github.com/trim21/pre-commit-mirror-meson

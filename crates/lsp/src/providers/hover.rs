@@ -64,42 +64,26 @@ pub fn hover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::doc;
     use crate::providers::account::account_at_position;
-    use beancount_parser::{core, parse_str};
-    use beancount_tree_sitter::{language, tree_sitter};
+    use crate::test_utils::lines;
     use std::str::FromStr;
     use tower_lsp_server::ls_types::{
         Position, TextDocumentIdentifier, TextDocumentPositionParams,
     };
 
     fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
-        let directives =
-            core::normalize_directives(parse_str(content, uri.as_str()).unwrap()).unwrap();
-        let includes = directives
-            .iter()
-            .filter_map(|directive| match directive {
-                core::CoreDirective::Include(include) => Some(include.filename.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let rope = ropey::Rope::from_str(content);
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language()).unwrap();
-        let tree = parser.parse(content, None).unwrap();
-        Arc::new(Document {
-            directives,
-            includes,
-            content: content.to_owned(),
-            rope,
-            tree,
-        })
+        Arc::new(doc::build_document(content.to_string(), uri.as_str()).expect("build doc"))
     }
 
     #[test]
     fn hover_shows_account_notes() {
         let uri = Url::from_str("file:///hover.bean").unwrap();
-        let content = "2023-01-01 open Assets:Cash\n2023-02-01 note Assets:Cash \"First note\"\n";
-        let doc = build_doc(&uri, content);
+        let content = lines(&[
+            r#"2023-01-01 open Assets:Cash"#,
+            r#"2023-02-01 note Assets:Cash "First note""#,
+        ]);
+        let doc = build_doc(&uri, &content);
 
         let mut docs = HashMap::new();
         docs.insert(uri.clone(), doc);
