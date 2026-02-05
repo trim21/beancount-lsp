@@ -21,7 +21,7 @@ mod tests {
         ]);
 
         let expected =
-            "2022-01-01 * \"...\" \"...\" #food  \n  Assets:Cash -10 USD\n  Expenses:Food";
+            "2022-01-01 * \"...\" \"...\" #food\n  Assets:Cash -10 USD\n  Expenses:Food";
         assert_eq!(input, expected);
     }
 }
