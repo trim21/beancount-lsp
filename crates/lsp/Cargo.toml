@@ -13,7 +13,7 @@ pyo3 = ["dep:pyo3"]
 [dependencies]
 anyhow = "1.0.100"
 beancount-parser = { workspace = true }
-clap = { version = "4.5.56", features = ["derive"] }
+clap = { version = "4.5.57", features = ["derive"] }
 glob = "0.3.3"
 lru = "0.16.3"
 pyo3 = { version = "0.28.0", features = ["auto-initialize", "abi3-py310", "generate-import-lib"], optional = true }
