@@ -402,12 +402,8 @@ fn collect_number_expr(content: &Rope, expr: &ast::NumberExpr<'_>, out: &mut Vec
     match expr {
         ast::NumberExpr::Missing { .. } => {}
         ast::NumberExpr::Literal(value) => push_number_literal(content, value, out),
-        ast::NumberExpr::Binary {
-            left, op, right, ..
-        } => {
-            collect_number_expr(content, left, out);
-            push_with_span(content, op, TokenKind::Operator, out);
-            collect_number_expr(content, right, out);
+        ast::NumberExpr::Binary { span, .. } => {
+            push_span(content, *span, TokenKind::Number, out);
         }
     }
 }
