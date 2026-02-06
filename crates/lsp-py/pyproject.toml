@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["beancount>=3,<4"]
 
+[project.urls]
+repository = 'https://github.com/trim21/beancount-lsp'
+
 [project.scripts]
 beancount-lsp = "beancount_lsp.cli:main"
 beancount-langauge-server = "beancount_lsp.cli:main"
