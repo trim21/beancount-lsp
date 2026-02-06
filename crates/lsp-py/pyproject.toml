@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "beancount-lsp"
 description = "Beancount LSP packaged for Python environments"
-version = "0.0.5"
+version = "0.0.6"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["beancount>=3,<4"]
