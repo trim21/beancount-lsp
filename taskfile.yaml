@@ -33,13 +33,13 @@ tasks:
     cmds:
       - git add vscode/package.json
       - 'git commit -m "release(vscode): {{.VERSION}}"'
-      - 'git tag "vscode/v{{.VERSION}}" -m "vscode/v{{.VERSION}}"'
+      - 'git tag "vscode/v{{.VERSION}}" -m "vscode/v{{.VERSION}}" -a'
 
   bump:lsp:
     vars:
       VERSION:
-        sh: yq '.project.version' crates/lsp-py/pyproject.toml
+        sh: tomlq -r '.project.version' crates/lsp-py/pyproject.toml
     cmds:
       - git add crates/lsp-py/pyproject.toml
       - 'git commit -m "release: {{.VERSION}}"'
-      - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}"'
+      - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}" -a'
