@@ -38,7 +38,7 @@ tasks:
   bump:lsp:
     vars:
       VERSION:
-        sh: tomlq -r '.project.version' crates/lsp-py/pyproject.toml
+        sh: yq -r '.project.version' crates/lsp-py/pyproject.toml
     cmds:
       - git add crates/lsp-py/pyproject.toml
       - 'git commit -m "release: {{.VERSION}}"'
