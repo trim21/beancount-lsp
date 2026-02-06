@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::text::byte_to_lsp_position;
-use beancount_parser::{ast, parse_lossy_with_rope};
+use beancount_parser::{ast, parse_lossy};
 use ropey::Rope;
 use tower_lsp_server::ls_types::{
   SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
@@ -146,7 +146,8 @@ fn semantic_tokens_from_parsed(
 /// This is intended for the "highlight while typing" path: it avoids depending on the indexer
 /// snapshot (which can lag behind rapid edits) and doesn't require building a full `Document`.
 pub fn semantic_tokens_full_from_text(text: &str) -> Option<SemanticTokensResult> {
-  let (directives, rope) = parse_lossy_with_rope(text);
+  let rope = Rope::from_str(text);
+  let directives = parse_lossy(text);
   semantic_tokens_from_parsed(&directives, &rope, text.len())
 }
 
