@@ -11,7 +11,7 @@ use crate::providers::account::account_at_position;
 use crate::server::{Document, documents_bfs, find_document};
 use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
-const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note", "price"];
+const DATE_KEYWORDS: &[&str] = &["custom", "balance", "open", "close", "note", "price", "pad"];
 const ROOT_KEYWORDS: &[&str] = &[
     "include", "option", "pushtag", "poptag", "pushmeta", "popmeta",
 ];
