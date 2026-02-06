@@ -21,8 +21,7 @@ classifiers = [
 dependencies = ["beancount>=3,<4"]
 
 [project.urls]
-homepage = 'https://github.com/trim21/beancount-lsp'
-repository = 'https://github.com/trim21/beancount-lsp'
+Homepage = 'https://github.com/trim21/beancount-lsp'
 
 [project.scripts]
 beancount-lsp = "beancount_lsp.cli:main"
