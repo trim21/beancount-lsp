@@ -14,7 +14,7 @@ tasks:
   build:lsp-py:
     desc: Build Python extension via maturin (uses project-local uv env)
     cmds:
-      - uv build --wheel ./crates/lsp-py
+      - uv build --wheel .
 
   test:lsp-py:
     desc: (Placeholder) Python package has no tests; runs cargo checks for the pyo3 crate
@@ -38,8 +38,8 @@ tasks:
   bump:lsp:
     vars:
       VERSION:
-        sh: yq -r '.project.version' crates/lsp-py/pyproject.toml
+        sh: yq -r '.project.version' pyproject.toml
     cmds:
-      - git add crates/lsp-py/pyproject.toml
+      - git add pyproject.toml
       - 'git commit -m "release: {{.VERSION}}"'
       - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}" -a'
