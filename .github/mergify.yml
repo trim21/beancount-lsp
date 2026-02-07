@@ -13,6 +13,7 @@ pull_request_rules:
           - '#approved-reviews-by>=1'
           - label=auto-merge
       - base=master
+      - 'created-at<=24h ago'
       - check-success=vscode-test
       - check-success=cargo-test
       - check-success=wheel-test
