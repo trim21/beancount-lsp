@@ -12,7 +12,6 @@ pull_request_rules:
       - or:
           - '#approved-reviews-by>=1'
           - label=auto-merge
-      - -conflict
       - base=master
       - check-success=vscode-test
       - check-success=cargo-test
