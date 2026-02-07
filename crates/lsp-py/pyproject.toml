@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "beancount-lsp"
-version = "0.0.8"
+version = "0.0.9"
 requires-python = ">=3.10"
 description = "Beancount LSP packaged for Python environments"
 authors = [{ name = "trim21", email = 'trim21.me@gmail.com"' }]
