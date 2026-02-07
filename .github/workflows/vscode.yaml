@@ -9,7 +9,7 @@ on:
       - master
 
 jobs:
-  test:
+  vscode-test:
     runs-on: ubuntu-24.04
 
     steps:
