@@ -39,33 +39,30 @@ fn error_to_diagnostic(error: Bound<'_, PyAny>) -> PyResult<CheckerDiagnostic> {
   let message: String = error.getattr("message")?.extract()?;
 
   let (lineno, filename) = {
-    let entry_meta = error
-      .getattr("entry")
-      .ok()
-      .and_then(|entry| entry.getattr("meta").ok());
+    let source = error.getattr("source").ok();
 
-    let lineno = error
-      .getattr("lineno")
-      .ok()
+    let lineno = source
+      .as_ref()
+      .and_then(|source| source.get_item("lineno").ok())
       .and_then(|line| line.extract::<usize>().ok())
       .or_else(|| {
-        entry_meta
-          .as_ref()
-          .and_then(|meta| meta.get_item("lineno").ok())
+        error
+          .getattr("lineno")
+          .ok()
           .and_then(|line| line.extract::<usize>().ok())
       })
       .map(|line| line.saturating_sub(1) as u32)
       .unwrap_or(0);
 
-    let filename = error
-      .getattr("filename")
-      .ok()
+    let filename = source
+      .as_ref()
+      .and_then(|source| source.get_item("filename").ok())
       .and_then(|value| value.extract::<String>().ok())
       .filter(|name| !name.is_empty())
       .or_else(|| {
-        entry_meta
-          .as_ref()
-          .and_then(|meta| meta.get_item("filename").ok())
+        error
+          .getattr("filename")
+          .ok()
           .and_then(|value| value.extract::<String>().ok())
           .filter(|name| !name.is_empty())
       });
