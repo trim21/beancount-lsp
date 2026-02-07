@@ -139,10 +139,7 @@ enum IndexerCommand {
 
 fn checker_diagnostic_to_lsp(diag: CheckerDiagnostic, source: &str) -> Diagnostic {
   let line = diag.lineno.unwrap_or(0);
-  let message = match diag.filename.filter(|name| !name.is_empty()) {
-    Some(name) => format!("{name}: {}", diag.message),
-    None => diag.message,
-  };
+  let message = diag.message;
 
   Diagnostic {
     range: Range {

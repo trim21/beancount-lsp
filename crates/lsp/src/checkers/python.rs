@@ -73,11 +73,6 @@ fn error_to_diagnostic(error: Bound<'_, PyAny>) -> PyResult<CheckerDiagnostic> {
     (lineno, filename)
   };
 
-  let message = match filename.as_ref() {
-    Some(name) => format!("{name}: {message}"),
-    None => message,
-  };
-
   Ok(CheckerDiagnostic {
     message,
     filename,
