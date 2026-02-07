@@ -17,7 +17,6 @@ env:
 
 jobs:
   rust:
-    name: cargo test
     runs-on: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -38,3 +37,10 @@ jobs:
 
       - name: Test (cargo test)
         run: cargo nextest run -p beancount-lsp
+
+  cargo-test:
+    runs-on: ubuntu-slim
+    needs:
+      - rust
+    steps:
+      - run: echo 1
