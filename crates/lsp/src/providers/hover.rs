@@ -39,6 +39,8 @@ pub fn hover(
   let (account, account_range) = find_document(documents, uri)
     .and_then(|doc| account_at_position(doc.as_ref(), position))?;
 
+  tracing::debug!("hover requested for account: {}", account);
+
   let notes = notes_for_account(documents, root_uri, &account);
   if notes.is_empty() {
     return None;

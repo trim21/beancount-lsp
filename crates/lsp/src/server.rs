@@ -32,6 +32,12 @@ pub(crate) fn documents_bfs(
   documents: &HashMap<Url, Arc<Document>>,
   root: &Url,
 ) -> Vec<(Url, Arc<Document>)> {
+  tracing::debug!(
+    "keys: {:?}",
+    documents.keys().map(|f| f.to_string()).collect::<Vec<_>>()
+  );
+  tracing::debug!("root: {:?}", root.to_string());
+
   let mut ordered = Vec::new();
   let mut queue: VecDeque<Url> = VecDeque::new();
   let mut visited: HashSet<String> = HashSet::new();
@@ -67,6 +73,15 @@ pub(crate) fn documents_bfs(
   }
 
   ordered
+}
+
+fn normalize_uri(uri: &Url) -> Url {
+  let Some(path) = uri.to_file_path() else {
+    return uri.clone();
+  };
+
+  let canonical = canonical_or_original(path.as_ref());
+  Url::from_file_path(canonical).unwrap_or_else(|| uri.clone())
 }
 
 fn resolve_document_from_snapshot(
@@ -348,11 +363,15 @@ impl Backend {
   }
 
   async fn update_document(&self, uri: Url, text: String) {
+    let normalized_uri = normalize_uri(&uri);
     {
       let mut guard = self.documents_text.write().await;
-      guard.insert(uri.clone(), Arc::new(text.clone()));
+      guard.insert(normalized_uri.clone(), Arc::new(text.clone()));
     }
-    let _ = self.indexer_tx.send(IndexerCommand::Update { uri, text });
+    let _ = self.indexer_tx.send(IndexerCommand::Update {
+      uri: normalized_uri,
+      text,
+    });
     if self
       .inner
       .read()
@@ -503,8 +522,9 @@ impl LanguageServer for Backend {
   }
 
   async fn did_close(&self, params: DidCloseTextDocumentParams) {
+    let normalized_uri = normalize_uri(&params.text_document.uri);
     let mut guard = self.documents_text.write().await;
-    guard.remove(&params.text_document.uri);
+    guard.remove(&normalized_uri);
   }
 
   async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -528,7 +548,8 @@ impl LanguageServer for Backend {
     params: CompletionParams,
   ) -> Result<Option<CompletionResponse>> {
     tracing::debug!("completion triggered");
-    let current_uri = params.text_document_position.text_document.uri.clone();
+    let current_uri =
+      normalize_uri(&params.text_document_position.text_document.uri.clone());
 
     let (snapshot, root_uri) = self
       .with_inner(|inner| {
@@ -563,22 +584,14 @@ impl LanguageServer for Backend {
   }
 
   async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-    let current_uri = params
-      .text_document_position_params
-      .text_document
-      .uri
-      .clone();
+    let current_uri =
+      normalize_uri(&params.text_document_position_params.text_document.uri);
     self
       .with_inner(|inner| {
         let snapshot = inner.snapshot_rx.borrow().clone();
         match &inner.root_uri {
           Some(root_uri) => hover::hover(snapshot.as_ref(), root_uri, &params),
-          None => {
-            let doc = resolve_document_from_snapshot(snapshot.as_ref(), &current_uri)?;
-            let mut docs = HashMap::new();
-            docs.insert(current_uri.clone(), doc);
-            hover::hover(&docs, &current_uri, &params)
-          }
+          None => hover::hover(snapshot.as_ref(), &current_uri, &params),
         }
       })
       .await
@@ -588,11 +601,8 @@ impl LanguageServer for Backend {
     &self,
     params: GotoDefinitionParams,
   ) -> Result<Option<GotoDefinitionResponse>> {
-    let current_uri = params
-      .text_document_position_params
-      .text_document
-      .uri
-      .clone();
+    let current_uri =
+      normalize_uri(&params.text_document_position_params.text_document.uri);
     self
       .with_inner(|inner| {
         let snapshot = inner.snapshot_rx.borrow().clone();
@@ -615,7 +625,7 @@ impl LanguageServer for Backend {
     &self,
     params: SemanticTokensParams,
   ) -> Result<Option<SemanticTokensResult>> {
-    let uri = params.text_document.uri;
+    let uri = normalize_uri(&params.text_document.uri);
 
     tracing::debug!(uri = ?uri, "semantic tokens requested");
 
