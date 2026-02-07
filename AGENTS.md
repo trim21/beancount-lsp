@@ -25,7 +25,7 @@ This is a **beancount language server** implementation written in Rust that prov
 
 ## Dev workflows
 - Rust server: `cargo run -p beancount-lsp` starts the stdio LSP; `cargo test -p beancount-lsp` runs crate test.
-- Python package builds with maturin; from the repo root use the project-local virtualenv and run `uv run --project crates/lsp-py maturin develop` to build and install the extension in editable mode.
+- Python package builds with maturin; from the repo root use the project-local virtualenv and run `uv run maturin develop` to build and install the extension in editable mode.
 - Workspace dependencies share versions via `[workspace.dependencies]` in [Cargo.toml](Cargo.toml); `beancount-parser` is pinned to a specific git revision—avoid bumping without testing parser output.
 
 - When you touch rust code, you must run `cargo check -p beancount-lsp` to check if your code is correct. If it doesn't, you should fix the errors.

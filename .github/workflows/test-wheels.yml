@@ -22,8 +22,7 @@ jobs:
   build-wheel:
     uses: ./.github/workflows/_build_wheels.yaml
 
-  tests:
-    name: Tests (wheel install)
+  test-matrix:
     needs:
       - build-wheel
     runs-on: ${{ matrix.platform }}
@@ -65,3 +64,10 @@ jobs:
         run: uv pip install --system beancount-lsp --find-links ./dist/
 
       - run: beancount-lsp --help
+
+  wheel-test:
+    runs-on: ubuntu-slim
+    needs:
+      - test-matrix
+    steps:
+      - run: echo 1

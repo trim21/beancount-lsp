@@ -16,13 +16,13 @@ jobs:
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
 
-      - run: uv build --sdist ./crates/lsp-py
+      - run: uv build --sdist .
 
       - name: Upload sdist
         uses: actions/upload-artifact@v6
         with:
           name: wheels-sdist
-          path: ./crates/lsp-py/dist/*.tar.gz
+          path: ./dist/*.tar.gz
           if-no-files-found: 'error'
 
   wheel:
@@ -60,20 +60,19 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          working-directory: crates/lsp-py
           args: ${{ runner.os == 'Linux' && '--release --out dist --zig' || '--release --out dist' }}
           container: 'off'
           # https://github.com/tree-sitter/tree-sitter/issues/4186
           manylinux: '2_28'
 
-      - run: ls -ahl ./crates/lsp-py/dist/
+      - run: ls -ahl ./dist/
         shell: bash
 
       - name: Upload wheels
         uses: actions/upload-artifact@v6
         with:
           name: wheels-${{ runner.os }}-${{ matrix.platform.target }}
-          path: ./crates/lsp-py/dist/*.whl
+          path: ./dist/*.whl
           if-no-files-found: 'error'
 
   merge-wheel-artifact:

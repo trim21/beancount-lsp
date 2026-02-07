@@ -7,7 +7,7 @@ name = "beancount-lsp"
 version = "0.0.10"
 requires-python = ">=3.10"
 description = "Beancount LSP packaged for Python environments"
-authors = [{ name = "trim21", email = 'trim21.me@gmail.com"' }]
+authors = [{ name = "trim21", email = "trim21.me@gmail.com" }]
 readme = "README.md"
 license = "MIT"
 classifiers = [
@@ -21,7 +21,7 @@ classifiers = [
 dependencies = ["beancount>=3,<4"]
 
 [project.urls]
-Homepage = 'https://github.com/trim21/beancount-lsp'
+Homepage = "https://github.com/trim21/beancount-lsp"
 
 [project.scripts]
 beancount-lsp = "beancount_lsp.cli:main"
@@ -31,8 +31,8 @@ beancount-langauge-server = "beancount_lsp.cli:main"
 package = false
 
 [tool.maturin]
-manifest-path = "Cargo.toml"
+manifest-path = "crates/lsp-py/Cargo.toml"
 module-name = "beancount_lsp._lsp"
 bindings = "pyo3"
-python-source = "py-src"
+python-source = "crates/lsp-py/py-src"
 strip = true
