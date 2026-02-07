@@ -16,8 +16,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: Rust fmt, lint
+  cargo-fmt-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
