@@ -1,0 +1,23 @@
+pull_request_rules:
+  - name: label conflicts
+    conditions:
+      - conflict
+    actions:
+      label:
+        toggle:
+          - conflict
+
+  - name: Automatic merge on approval
+    conditions:
+      - or:
+          - '#approved-reviews-by>=1'
+          - -label=auto-merge
+      - -conflict
+      - base=master
+      - check-success=vscode-test
+      - check-success=cargo-test
+      - check-success=wheel-test
+      - check-success=cargo-fmt-lint
+    actions:
+      merge:
+        method: squash
