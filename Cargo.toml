@@ -5,7 +5,7 @@ package.version = "0.0.0"
 
 [workspace.dependencies]
 beancount-core = { git = "https://github.com/trim21/beancount.git", rev = "2def82fa092198c38c562253e51849d1300d2eb5" }
-beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "2def82fa092198c38c562253e51849d1300d2eb5" }
+beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "a6682bbe95711ef6c1b1aa76117415bf824a320f" }
 ropey = "1.6.1"
 tokio = { version = "1.49.0", features = ["fs", "io-std", "macros", "rt-multi-thread", "sync"] }
 tower-lsp-server = "0.23.0"

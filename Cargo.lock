@@ -135,7 +135,7 @@ name = "beancount-core"
 version = "3.3.0-alpha.0"
 source = "git+https://github.com/trim21/beancount.git?rev=2def82fa092198c38c562253e51849d1300d2eb5#2def82fa092198c38c562253e51849d1300d2eb5"
 dependencies = [
- "beancount-parser",
+ "beancount-parser 3.3.0-alpha.0 (git+https://github.com/trim21/beancount.git?rev=2def82fa092198c38c562253e51849d1300d2eb5)",
  "chrono",
  "path-clean",
  "ropey",
@@ -150,7 +150,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "beancount-core",
- "beancount-parser",
+ "beancount-parser 3.3.0-alpha.0 (git+https://github.com/trim21/beancount.git?rev=a6682bbe95711ef6c1b1aa76117415bf824a320f)",
  "clap",
  "criterion",
  "glob",
@@ -185,6 +185,22 @@ dependencies = [
  "ariadne",
  "chrono",
  "chumsky",
+ "ropey",
+ "rust_decimal",
+ "serde_json",
+ "smallvec",
+]
+
+[[package]]
+name = "beancount-parser"
+version = "3.3.0-alpha.0"
+source = "git+https://github.com/trim21/beancount.git?rev=a6682bbe95711ef6c1b1aa76117415bf824a320f#a6682bbe95711ef6c1b1aa76117415bf824a320f"
+dependencies = [
+ "anyhow",
+ "ariadne",
+ "chrono",
+ "chumsky",
+ "path-clean",
  "ropey",
  "rust_decimal",
  "serde_json",
