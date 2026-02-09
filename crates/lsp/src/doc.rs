@@ -2,7 +2,9 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use beancount_parser::{ast, core, parse_lossy};
+use beancount_core as core;
+use beancount_core::inference::InferenceError;
+use beancount_parser::{ast, parse_lossy};
 use ropey::Rope;
 use tower_lsp_server::ls_types::Uri as Url;
 
@@ -37,7 +39,10 @@ pub(crate) fn find_document(
 pub struct Document {
   content: String,
   ast: Vec<ast::Directive<'static>>,
-  pub directives: Vec<core::CoreDirective>,
+  pub directives: Vec<core::Directive>,
+  pub inferred: Vec<core::InferredDirective>,
+  pub inferrence_errors: Vec<InferenceError>,
+  pub errors: Vec<core::ParseError>,
   pub includes: Vec<String>,
   pub accounts: HashSet<String>,
   pub rope: Rope,
@@ -111,14 +116,22 @@ pub fn build_document(text: String, filename: &str) -> Option<Document> {
   let rope = Rope::from_str(text.as_str());
   let ast = parse_lossy(&text);
 
-  let directives = core::normalize_directives_with_rope(&ast, filename, &rope)
-    .ok()
-    .unwrap_or_default();
+  let mut errors = Vec::new();
+
+  let directives = match core::normalize_directives_with_rope(&ast, filename, &rope) {
+    Ok(directives) => directives,
+    Err(err) => {
+      errors.push(err);
+      Vec::new()
+    }
+  };
+
+  let (inferred, inferrence_errors) = core::infer_directives(directives.clone());
 
   let includes = directives
     .iter()
     .filter_map(|directive| match directive {
-      core::CoreDirective::Include(include) => Some(include.filename.clone()),
+      core::Directive::Include(include) => Some(include.filename.clone()),
       _ => None,
     })
     .collect();
@@ -137,35 +150,36 @@ pub fn build_document(text: String, filename: &str) -> Option<Document> {
     content: text,
     ast,
     directives,
+    inferred,
+    errors,
+    inferrence_errors,
     includes,
     accounts,
     rope,
   })
 }
 
-fn collect_accounts(directives: &[core::CoreDirective]) -> HashSet<String> {
+fn collect_accounts(directives: &[core::Directive]) -> HashSet<String> {
   let mut accounts = HashSet::new();
 
   for directive in directives {
     match directive {
-      core::CoreDirective::Open(open) => insert_account(&mut accounts, &open.account),
-      core::CoreDirective::Balance(balance) => {
+      core::Directive::Open(open) => insert_account(&mut accounts, &open.account),
+      core::Directive::Balance(balance) => {
         insert_account(&mut accounts, &balance.account)
       }
-      core::CoreDirective::Pad(pad) => {
+      core::Directive::Pad(pad) => {
         insert_account(&mut accounts, &pad.account);
         insert_account(&mut accounts, &pad.from_account);
       }
-      core::CoreDirective::Close(close) => {
-        insert_account(&mut accounts, &close.account)
-      }
-      core::CoreDirective::Transaction(tx) => {
+      core::Directive::Close(close) => insert_account(&mut accounts, &close.account),
+      core::Directive::Transaction(tx) => {
         for posting in &tx.postings {
           insert_account(&mut accounts, &posting.account);
         }
       }
-      core::CoreDirective::Note(note) => insert_account(&mut accounts, &note.account),
-      core::CoreDirective::Document(doc) => insert_account(&mut accounts, &doc.account),
+      core::Directive::Note(note) => insert_account(&mut accounts, &note.account),
+      core::Directive::Document(doc) => insert_account(&mut accounts, &doc.account),
       _ => {}
     }
   }

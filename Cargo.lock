@@ -109,6 +109,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ariadne"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44055e597c674aef7cb903b2b9f6e4cba1277ed0d2d61dae7cd52d7ffa81f8e2"
+dependencies = [
+ "unicode-width",
+ "yansi",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,10 +131,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "beancount-core"
+version = "3.3.0-alpha.0"
+source = "git+https://github.com/trim21/beancount.git?rev=3ae5a0620807a313f0d989a1992d880b842e0d77#3ae5a0620807a313f0d989a1992d880b842e0d77"
+dependencies = [
+ "beancount-parser",
+ "chrono",
+ "path-clean",
+ "ropey",
+ "rust_decimal",
+ "serde_json",
+ "smallvec",
+]
+
+[[package]]
 name = "beancount-lsp"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "beancount-core",
  "beancount-parser",
  "clap",
  "criterion",
@@ -154,12 +179,12 @@ dependencies = [
 [[package]]
 name = "beancount-parser"
 version = "3.3.0-alpha.0"
-source = "git+https://github.com/trim21/beancount.git?rev=318fa7ab#318fa7ab9e885eb58b601b317866a03bf31db25a"
+source = "git+https://github.com/trim21/beancount.git?rev=3ae5a0620807a313f0d989a1992d880b842e0d77#3ae5a0620807a313f0d989a1992d880b842e0d77"
 dependencies = [
  "anyhow",
+ "ariadne",
  "chrono",
  "chumsky",
- "path-clean",
  "ropey",
  "rust_decimal",
  "serde_json",
@@ -1711,6 +1736,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493"
 
 [[package]]
+name = "unicode-width"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
+
+[[package]]
 name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1960,6 +1991,12 @@ checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
 ]
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "zerocopy"

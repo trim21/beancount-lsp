@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use beancount_parser::core;
+use beancount_core as core;
 use tower_lsp_server::ls_types::{
   Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Uri as Url,
 };
@@ -17,7 +17,7 @@ fn notes_for_account(
   let mut notes = Vec::new();
   for (_, doc) in documents_bfs(documents, root_uri) {
     for dir in &doc.directives {
-      if let core::CoreDirective::Note(n) = dir
+      if let core::Directive::Note(n) = dir
         && n.account == account
         && !n.note.is_empty()
       {
