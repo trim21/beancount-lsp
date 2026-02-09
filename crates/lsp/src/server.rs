@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::anyhow;
+use beancount_core::ParseError;
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock, mpsc, watch};
 use tokio::task;
@@ -168,6 +169,22 @@ fn checker_diagnostic_to_lsp(diag: CheckerDiagnostic, source: &str) -> Diagnosti
   }
 }
 
+fn parse_error_to_lsp(err: &ParseError) -> Diagnostic {
+  let line = err.line.saturating_sub(1) as u32;
+  let col = err.column.saturating_sub(1) as u32;
+
+  Diagnostic {
+    range: Range {
+      start: Position::new(line, col),
+      end: Position::new(line, col.saturating_add(1)),
+    },
+    severity: Some(DiagnosticSeverity::ERROR),
+    source: Some("beancount (parser)".to_string()),
+    message: err.message.clone(),
+    ..Diagnostic::default()
+  }
+}
+
 pub fn parse_initialize_config(params: &InitializeParams) -> Result<InitializeConfig> {
   let value = params
     .initialization_options
@@ -283,6 +300,23 @@ impl Backend {
     let root_path = canonical_or_original(root_file);
     let root_file_str = root_path.display().to_string();
     let mut diags_by_uri: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+
+    if let Some(snapshot) = self
+      .inner
+      .read()
+      .await
+      .as_ref()
+      .map(|inner| inner.snapshot_rx.borrow().clone())
+    {
+      for (uri, doc) in snapshot.iter() {
+        if doc.errors.is_empty() {
+          continue;
+        }
+
+        let diags = diags_by_uri.entry(uri.clone()).or_default();
+        diags.extend(doc.errors.iter().map(parse_error_to_lsp));
+      }
+    }
 
     if let Some(checker) = self.checker.as_ref().map(Arc::clone) {
       let result = task::spawn_blocking(move || {

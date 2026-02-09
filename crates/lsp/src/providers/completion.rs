@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use beancount_parser::{ast, core};
+use beancount_core as core;
+use beancount_parser::ast;
 use tower_lsp_server::ls_types::{
   CompletionItem, CompletionItemKind, CompletionList, CompletionParams,
   CompletionTextEdit, Position, Range, TextEdit, Uri as Url,
@@ -495,7 +496,7 @@ pub fn completion(
       let mut tags = HashSet::new();
       for (_, doc) in documents_bfs(documents, root_uri) {
         for dir in &doc.directives {
-          if let core::CoreDirective::Transaction(tx) = dir {
+          if let core::Directive::Transaction(tx) = dir {
             for tag in &tx.tags {
               if !tag.is_empty() {
                 tags.insert(tag.clone());
