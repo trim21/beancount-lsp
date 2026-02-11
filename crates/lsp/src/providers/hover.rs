@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -41,26 +42,50 @@ fn posting_at_position(
   position: Position,
 ) -> Option<PostingHoverTarget> {
   let byte_idx = lsp_position_to_byte(&doc.rope, position)?;
+  let directives = doc.ast();
+
+  let directive_index_at = |offset: usize| {
+    directives
+      .binary_search_by(|directive| {
+        let span = Document::directive_span(directive);
+        if offset < span.start {
+          Ordering::Greater
+        } else if offset >= span.end {
+          Ordering::Less
+        } else {
+          Ordering::Equal
+        }
+      })
+      .ok()
+  };
+
+  let directive_idx = directive_index_at(byte_idx).or_else(|| {
+    byte_idx
+      .checked_sub(1)
+      .and_then(directive_index_at)
+  })?;
+
+  let directive = directives.get(directive_idx)?;
+  let ast::Directive::Transaction(tx) = directive else {
+    return None;
+  };
 
   let span_contains = |span: ast::Span| span.start <= byte_idx && byte_idx <= span.end;
 
-  let mut tx_index = 0usize;
-  for directive in doc.ast() {
-    if let ast::Directive::Transaction(tx) = directive {
-      for (posting_index, posting) in tx.postings.iter().enumerate() {
-        if span_contains(posting.account.span) {
-          return Some(PostingHoverTarget {
-            transaction_index: tx_index,
-            posting_index,
-          });
-        }
-      }
+  let posting_index = tx
+    .postings
+    .iter()
+    .position(|posting| span_contains(posting.account.span))?;
+  let transaction_index = directives[..=directive_idx]
+    .iter()
+    .filter(|dir| matches!(dir, ast::Directive::Transaction(_)))
+    .count()
+    .saturating_sub(1);
 
-      tx_index = tx_index.saturating_add(1);
-    }
-  }
-
-  None
+  Some(PostingHoverTarget {
+    transaction_index,
+    posting_index,
+  })
 }
 
 fn format_inferred_amount(amount: &core::inference::InferredAmount) -> String {
