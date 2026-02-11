@@ -1,10 +1,8 @@
 [package]
 name = "beancount-lsp"
 version = { workspace = true }
-authors = ["Trim21 <trim21.me@gmail.com>"]
 edition = "2024"
-license = "MIT"
-description = "Beancount LSP using beancount-parser"
+description = "Beancount LSP"
 
 [features]
 default = []

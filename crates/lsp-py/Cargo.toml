@@ -1,10 +1,7 @@
 [package]
 name = "beancount-lsp-py"
 version = { workspace = true }
-authors = ["Trim21 <trim21.me@gmail.com>"]
 edition = "2024"
-license = "MIT"
-description = "Python wheel wrapper for beancount-lsp"
 
 [lib]
 crate-type = ["cdylib"]
