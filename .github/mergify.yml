@@ -9,9 +9,13 @@ pull_request_rules:
 
   - name: Automatic merge on approval
     conditions:
+      - '#commits-behind=0'
       - or:
           - '#approved-reviews-by>=1'
-          - label=auto-merge
+          - label=ci:auto-merge
+      - or:
+          - head!=renovate/lock-file-maintenance
+          - 'created-at<=24h ago'
       - base=master
       - 'created-at<=24h ago'
       - check-success=vscode-test

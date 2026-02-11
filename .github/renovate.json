@@ -7,7 +7,7 @@
     "github>trim21/renovate-config:rust"
   ],
   "labels": [
-    "auto-merge",
+    "ci:auto-merge",
     "dependencies"
   ],
   "lockFileMaintenance": {
