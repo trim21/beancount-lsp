@@ -6,6 +6,7 @@
     "github>trim21/renovate-config:monthly",
     "github>trim21/renovate-config:rust"
   ],
+  "prConcurrentLimit": 3,
   "labels": [
     "ci:auto-merge",
     "dependencies"
