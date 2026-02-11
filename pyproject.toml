@@ -4,12 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "beancount-lsp"
-version = "0.0.11"
+version = "0.0.12"
 requires-python = ">=3.10"
 description = "Beancount LSP packaged for Python environments"
 authors = [{ name = "trim21", email = "trim21.me@gmail.com" }]
 readme = "README.md"
-license = "MIT"
+license = { file = "LICENSE" }
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python",
