@@ -59,11 +59,8 @@ fn posting_at_position(
       .ok()
   };
 
-  let directive_idx = directive_index_at(byte_idx).or_else(|| {
-    byte_idx
-      .checked_sub(1)
-      .and_then(directive_index_at)
-  })?;
+  let directive_idx = directive_index_at(byte_idx)
+    .or_else(|| byte_idx.checked_sub(1).and_then(directive_index_at))?;
 
   let directive = directives.get(directive_idx)?;
   let ast::Directive::Transaction(tx) = directive else {
