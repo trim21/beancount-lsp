@@ -17,7 +17,6 @@ pull_request_rules:
           - head!=renovate/lock-file-maintenance
           - 'created-at<=24h ago'
       - base=master
-      - 'created-at<=24h ago'
       - check-success=vscode-test
       - check-success=cargo-test
       - check-success=wheel-test
