@@ -133,10 +133,11 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "beancount-core"
 version = "3.3.0-alpha.0"
-source = "git+https://github.com/trim21/beancount.git?rev=3ae5a0620807a313f0d989a1992d880b842e0d77#3ae5a0620807a313f0d989a1992d880b842e0d77"
+source = "git+https://github.com/trim21/beancount.git?rev=50f898fe#50f898fe1636efa1a59222c70fa0e288f442cc08"
 dependencies = [
  "beancount-parser",
  "chrono",
+ "glob",
  "path-clean",
  "ropey",
  "rust_decimal",
@@ -179,7 +180,7 @@ dependencies = [
 [[package]]
 name = "beancount-parser"
 version = "3.3.0-alpha.0"
-source = "git+https://github.com/trim21/beancount.git?rev=3ae5a0620807a313f0d989a1992d880b842e0d77#3ae5a0620807a313f0d989a1992d880b842e0d77"
+source = "git+https://github.com/trim21/beancount.git?rev=50f898fe#50f898fe1636efa1a59222c70fa0e288f442cc08"
 dependencies = [
  "anyhow",
  "ariadne",
