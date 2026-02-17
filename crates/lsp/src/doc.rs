@@ -237,24 +237,8 @@ fn collect_accounts(directives: &[core::Directive]) -> HashSet<String> {
   let mut accounts = HashSet::new();
 
   for directive in directives {
-    match directive {
-      core::Directive::Open(open) => insert_account(&mut accounts, &open.account),
-      core::Directive::Balance(balance) => {
-        insert_account(&mut accounts, &balance.account)
-      }
-      core::Directive::Pad(pad) => {
-        insert_account(&mut accounts, &pad.account);
-        insert_account(&mut accounts, &pad.from_account);
-      }
-      core::Directive::Close(close) => insert_account(&mut accounts, &close.account),
-      core::Directive::Transaction(tx) => {
-        for posting in &tx.postings {
-          insert_account(&mut accounts, &posting.account);
-        }
-      }
-      core::Directive::Note(note) => insert_account(&mut accounts, &note.account),
-      core::Directive::Document(doc) => insert_account(&mut accounts, &doc.account),
-      _ => {}
+    if let core::Directive::Open(open) = directive {
+      insert_account(&mut accounts, &open.account);
     }
   }
 

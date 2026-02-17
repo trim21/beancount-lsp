@@ -235,9 +235,15 @@ fn completion_items_for_currency(
     currencies.extend(doc.currencies.iter().map(String::as_str));
   }
 
-  currencies
+  let mut labels: Vec<&str> = currencies
     .into_iter()
     .filter(|label| starts_with_ignore_ascii_case(label, prefix))
+    .collect();
+
+  labels.sort_unstable();
+
+  labels
+    .into_iter()
     .map(|label| {
       completion_item_with_edit(
         label.to_string(),
@@ -1196,10 +1202,10 @@ mod tests {
       }),
     };
 
-    let items = completion_items(completion(&documents, &uri, &params));
+    let response = completion(&documents, &uri, &params);
     assert!(
-      items.iter().any(|i| i.label == "Expenses:Food"),
-      "expected account completion to include Expenses:Food",
+      response.is_none(),
+      "expected no account completion when no account has been opened",
     );
   }
 
