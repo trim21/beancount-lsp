@@ -1,7 +1,9 @@
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use beancount_parser::ast;
+use strsim::jaro_winkler;
 use tower_lsp_server::ls_types::{
   CompletionItem, CompletionItemKind, CompletionList, CompletionParams,
   CompletionTextEdit, Position, TextEdit, Uri as Url,
@@ -39,6 +41,28 @@ fn fuzzy_match(candidate: &str, prefix: &str) -> bool {
     }
   }
   true
+}
+
+fn similarity_score(candidate: &str, query: &str) -> f64 {
+  normalize_similarity_score(jaro_winkler(
+    &candidate.to_ascii_lowercase(),
+    &query.to_ascii_lowercase(),
+  ))
+}
+
+fn normalize_similarity_score(score: f64) -> f64 {
+  if score.is_nan() {
+    0.0
+  } else {
+    score.clamp(0.0, 1.0)
+  }
+}
+
+fn sort_labels_by_similarity(labels: &mut [&str], query: &str) {
+  labels.sort_by_cached_key(|label| {
+    let score = (similarity_score(label, query) * 1_000_000.0).round() as u64;
+    (Reverse(score), *label)
+  });
 }
 
 fn starts_with_ignore_ascii_case(candidate: &str, prefix: &str) -> bool {
@@ -165,6 +189,236 @@ fn insert_link_label<'a>(
   insert_label(labels, label);
 }
 
+fn completion_items_for_account(
+  documents: &HashMap<Url, Arc<Document>>,
+  root_uri: &Url,
+  prefix: &str,
+  replace_range: tower_lsp_server::ls_types::Range,
+) -> Vec<CompletionItem> {
+  let docs = documents_bfs(documents, root_uri);
+
+  let mut accounts = HashSet::new();
+  for (_, doc) in &docs {
+    accounts.extend(doc.accounts.iter().map(String::as_str));
+  }
+
+  let mut labels: Vec<&str> = accounts
+    .into_iter()
+    .filter(|label| fuzzy_match(label, prefix))
+    .collect();
+
+  sort_labels_by_similarity(&mut labels, prefix);
+
+  labels
+    .into_iter()
+    .map(|label| {
+      completion_item_with_edit(
+        label.to_string(),
+        CompletionItemKind::VALUE,
+        replace_range,
+        false,
+      )
+    })
+    .collect()
+}
+
+fn completion_items_for_currency(
+  documents: &HashMap<Url, Arc<Document>>,
+  root_uri: &Url,
+  prefix: &str,
+  replace_range: tower_lsp_server::ls_types::Range,
+) -> Vec<CompletionItem> {
+  let docs = documents_bfs(documents, root_uri);
+
+  let mut currencies = HashSet::new();
+  for (_, doc) in &docs {
+    currencies.extend(doc.currencies.iter().map(String::as_str));
+  }
+
+  currencies
+    .into_iter()
+    .filter(|label| starts_with_ignore_ascii_case(label, prefix))
+    .map(|label| {
+      completion_item_with_edit(
+        label.to_string(),
+        CompletionItemKind::VALUE,
+        replace_range,
+        false,
+      )
+    })
+    .collect()
+}
+
+fn completion_items_for_keyword(
+  doc: &Document,
+  position: Position,
+  prefix: &str,
+  replace_range: tower_lsp_server::ls_types::Range,
+  variants: &[&str],
+) -> Vec<CompletionItem> {
+  let append_whitespace =
+    should_append_keyword_whitespace(doc, position, replace_range);
+
+  let mut labels: Vec<&str> = variants
+    .iter()
+    .copied()
+    .filter(|label| fuzzy_match(label, prefix))
+    .collect();
+
+  sort_labels_by_similarity(&mut labels, prefix);
+
+  labels
+    .into_iter()
+    .map(|label| {
+      completion_item_with_edit(
+        label.to_string(),
+        CompletionItemKind::KEYWORD,
+        replace_range,
+        append_whitespace,
+      )
+    })
+    .collect()
+}
+
+fn completion_items_for_tag(
+  documents: &HashMap<Url, Arc<Document>>,
+  root_uri: &Url,
+  doc: &Arc<Document>,
+  prefix: &str,
+  replace_range: tower_lsp_server::ls_types::Range,
+) -> Vec<CompletionItem> {
+  let docs = documents_bfs(documents, root_uri);
+  let current_span = current_marker_label_span(doc.as_ref(), replace_range);
+
+  let mut tags = HashSet::new();
+  for (_, candidate_doc) in &docs {
+    let is_current_doc = Arc::ptr_eq(candidate_doc, doc);
+    for dir in candidate_doc.ast() {
+      if let ast::Directive::Transaction(tx) = dir {
+        for tag in &tx.tags {
+          if should_skip_current_marker(
+            is_current_doc,
+            current_span,
+            candidate_doc.content(),
+            tag.span,
+            '#',
+          ) {
+            continue;
+          }
+
+          let label = tag.content.trim_start_matches('#');
+          insert_label(&mut tags, label);
+        }
+      }
+    }
+  }
+
+  let mut labels: Vec<&str> = tags
+    .into_iter()
+    .filter(|label| fuzzy_match(label, prefix))
+    .collect();
+
+  sort_labels_by_similarity(&mut labels, prefix);
+
+  labels
+    .into_iter()
+    .map(|label| {
+      completion_item_with_edit(
+        label.to_string(),
+        CompletionItemKind::KEYWORD,
+        replace_range,
+        false,
+      )
+    })
+    .collect()
+}
+
+fn completion_items_for_link(
+  documents: &HashMap<Url, Arc<Document>>,
+  root_uri: &Url,
+  doc: &Arc<Document>,
+  prefix: &str,
+  replace_range: tower_lsp_server::ls_types::Range,
+) -> Vec<CompletionItem> {
+  let docs = documents_bfs(documents, root_uri);
+  let current_span = current_marker_label_span(doc.as_ref(), replace_range);
+
+  let mut links = HashSet::new();
+  for (_, candidate_doc) in &docs {
+    let is_current_doc = Arc::ptr_eq(candidate_doc, doc);
+    for dir in candidate_doc.ast() {
+      match dir {
+        ast::Directive::Transaction(tx) => {
+          for link in &tx.links {
+            if should_skip_current_marker(
+              is_current_doc,
+              current_span,
+              candidate_doc.content(),
+              link.span,
+              '^',
+            ) {
+              continue;
+            }
+
+            insert_link_label(&mut links, link.content, false);
+          }
+        }
+        ast::Directive::Document(document) => {
+          for link in &document.links {
+            if should_skip_current_marker(
+              is_current_doc,
+              current_span,
+              candidate_doc.content(),
+              link.span,
+              '^',
+            ) {
+              continue;
+            }
+
+            insert_link_label(&mut links, link.content, false);
+          }
+
+          if let Some(tags_links) = &document.tags_links {
+            for item in tags_links {
+              if should_skip_current_marker(
+                is_current_doc,
+                current_span,
+                candidate_doc.content(),
+                item.span,
+                '^',
+              ) {
+                continue;
+              }
+
+              insert_link_label(&mut links, item.content, true);
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+
+  let mut labels: Vec<&str> = links
+    .into_iter()
+    .filter(|label| fuzzy_match(label, prefix))
+    .collect();
+
+  sort_labels_by_similarity(&mut labels, prefix);
+
+  labels
+    .into_iter()
+    .map(|label| {
+      completion_item_with_edit(
+        label.to_string(),
+        CompletionItemKind::KEYWORD,
+        replace_range,
+        false,
+      )
+    })
+    .collect()
+}
+
 pub fn completion(
   documents: &HashMap<Url, Arc<Document>>,
   root_uri: &Url,
@@ -183,199 +437,35 @@ pub fn completion(
 
   spdlog::debug!("completion for {:?}", ctx);
 
-  let mut items: Vec<CompletionItem> = match ctx {
+  let items: Vec<CompletionItem> = match ctx {
     CompletionMode::Account {
       prefix,
       range: replace_range,
-    } => {
-      let docs = documents_bfs(documents, root_uri);
-
-      let mut accounts = HashSet::new();
-      for (_, doc) in &docs {
-        accounts.extend(doc.accounts.iter().map(String::as_str));
-      }
-
-      accounts
-        .into_iter()
-        .filter(|label| fuzzy_match(label, prefix))
-        .map(|label| {
-          completion_item_with_edit(
-            label.to_string(),
-            CompletionItemKind::VALUE,
-            replace_range,
-            false,
-          )
-        })
-        .collect()
-    }
+    } => completion_items_for_account(documents, root_uri, prefix, replace_range),
     CompletionMode::Currency {
       prefix,
       range: replace_range,
-    } => {
-      let docs = documents_bfs(documents, root_uri);
-
-      let mut currencies = HashSet::new();
-      for (_, doc) in &docs {
-        currencies.extend(doc.currencies.iter().map(String::as_str));
-      }
-
-      currencies
-        .into_iter()
-        .filter(|label| starts_with_ignore_ascii_case(label, prefix))
-        .map(|label| {
-          completion_item_with_edit(
-            label.to_string(),
-            CompletionItemKind::VALUE,
-            replace_range,
-            false,
-          )
-        })
-        .collect()
-    }
+    } => completion_items_for_currency(documents, root_uri, prefix, replace_range),
     CompletionMode::Keyword {
       prefix,
       range: replace_range,
       variants,
-    } => {
-      let append_whitespace =
-        should_append_keyword_whitespace(doc.as_ref(), position, replace_range);
-
-      variants
-        .iter()
-        .copied()
-        .filter(|label| fuzzy_match(label, prefix))
-        .map(|label| {
-          completion_item_with_edit(
-            label.to_string(),
-            CompletionItemKind::KEYWORD,
-            replace_range,
-            append_whitespace,
-          )
-        })
-        .collect()
-    }
+    } => completion_items_for_keyword(
+      doc.as_ref(),
+      position,
+      prefix,
+      replace_range,
+      variants,
+    ),
     CompletionMode::Tag {
       prefix,
       range: replace_range,
-    } => {
-      let docs = documents_bfs(documents, root_uri);
-      let current_span = current_marker_label_span(doc.as_ref(), replace_range);
-
-      let mut tags = HashSet::new();
-      for (_, candidate_doc) in &docs {
-        let is_current_doc = Arc::ptr_eq(candidate_doc, &doc);
-        for dir in candidate_doc.ast() {
-          if let ast::Directive::Transaction(tx) = dir {
-            for tag in &tx.tags {
-              if should_skip_current_marker(
-                is_current_doc,
-                current_span,
-                candidate_doc.content(),
-                tag.span,
-                '#',
-              ) {
-                continue;
-              }
-
-              let label = tag.content.trim_start_matches('#');
-              insert_label(&mut tags, label);
-            }
-          }
-        }
-      }
-
-      tags
-        .into_iter()
-        .filter(|label| fuzzy_match(label, prefix))
-        .map(|label| {
-          completion_item_with_edit(
-            label.to_string(),
-            CompletionItemKind::KEYWORD,
-            replace_range,
-            false,
-          )
-        })
-        .collect()
-    }
+    } => completion_items_for_tag(documents, root_uri, &doc, prefix, replace_range),
     CompletionMode::Link {
       prefix,
       range: replace_range,
-    } => {
-      let docs = documents_bfs(documents, root_uri);
-      let current_span = current_marker_label_span(doc.as_ref(), replace_range);
-
-      let mut links = HashSet::new();
-      for (_, candidate_doc) in &docs {
-        let is_current_doc = Arc::ptr_eq(candidate_doc, &doc);
-        for dir in candidate_doc.ast() {
-          match dir {
-            ast::Directive::Transaction(tx) => {
-              for link in &tx.links {
-                if should_skip_current_marker(
-                  is_current_doc,
-                  current_span,
-                  candidate_doc.content(),
-                  link.span,
-                  '^',
-                ) {
-                  continue;
-                }
-
-                insert_link_label(&mut links, link.content, false);
-              }
-            }
-            ast::Directive::Document(document) => {
-              for link in &document.links {
-                if should_skip_current_marker(
-                  is_current_doc,
-                  current_span,
-                  candidate_doc.content(),
-                  link.span,
-                  '^',
-                ) {
-                  continue;
-                }
-
-                insert_link_label(&mut links, link.content, false);
-              }
-
-              if let Some(tags_links) = &document.tags_links {
-                for item in tags_links {
-                  if should_skip_current_marker(
-                    is_current_doc,
-                    current_span,
-                    candidate_doc.content(),
-                    item.span,
-                    '^',
-                  ) {
-                    continue;
-                  }
-
-                  insert_link_label(&mut links, item.content, true);
-                }
-              }
-            }
-            _ => {}
-          }
-        }
-      }
-
-      links
-        .into_iter()
-        .filter(|label| fuzzy_match(label, prefix))
-        .map(|label| {
-          completion_item_with_edit(
-            label.to_string(),
-            CompletionItemKind::KEYWORD,
-            replace_range,
-            false,
-          )
-        })
-        .collect()
-    }
+    } => completion_items_for_link(documents, root_uri, &doc, prefix, replace_range),
   };
-
-  items.sort_by(|a, b| a.label.cmp(&b.label));
 
   if items.is_empty() {
     None
@@ -627,6 +717,73 @@ mod tests {
       response.is_none(),
       "expected no completion outside account nodes"
     );
+  }
+
+  #[test]
+  fn ranks_fuzzy_account_matches_by_score_before_ascii() {
+    let uri = Url::from_str("file:///ranked-accounts.bean").unwrap();
+    let content = [
+      "2023-01-01 open Alpha:Fd",
+      "2023-01-01 open Fd:Alpha",
+      "2023-01-01 open Liabilities:CreditCard",
+      "",
+      "2023-01-02 * \"...\" \"...\"",
+      "  fd|",
+      "  Liabilities:CreditCard -1 CNY",
+    ]
+    .join("\n");
+
+    let cursor_col = content
+      .lines()
+      .nth(5)
+      .and_then(|line| line.find('|'))
+      .expect("cursor marker present");
+
+    let content = {
+      let mut s = content;
+      let idx = s.find('|').expect("cursor marker present in content");
+      s.remove(idx);
+      s
+    };
+
+    let doc = build_doc(&uri, &content);
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position: Position::new(5, u32::try_from(cursor_col).unwrap()),
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &uri, &params));
+
+    let ascii_earlier_index = items
+      .iter()
+      .position(|i| i.label == "Alpha:Fd")
+      .expect("expected Alpha:Fd in completion list");
+    let higher_similarity_index = items
+      .iter()
+      .position(|i| i.label == "Fd:Alpha")
+      .expect("expected Fd:Alpha in completion list");
+
+    assert!(
+      higher_similarity_index < ascii_earlier_index,
+      "expected higher fuzzy score result to appear before ASCII-earlier one"
+    );
+  }
+
+  #[test]
+  fn treats_nan_similarity_as_zero() {
+    assert_eq!(normalize_similarity_score(f64::NAN), 0.0);
   }
 
   #[test]
