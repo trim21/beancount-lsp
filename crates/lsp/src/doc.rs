@@ -45,6 +45,7 @@ pub struct Document {
   pub errors: Vec<core::ParseError>,
   pub includes: Vec<String>,
   pub accounts: HashSet<String>,
+  pub currencies: HashSet<String>,
   pub rope: Rope,
 }
 
@@ -141,6 +142,7 @@ pub fn build_document(text: String, filename: &str) -> Option<Document> {
   // Note: completion may choose to apply additional heuristics for partially-edited/broken
   // documents; other LSP features can assume the document snapshot is valid.
   let accounts = collect_accounts(&directives);
+  let currencies = collect_currencies(&ast, &inferred);
 
   let ast = unsafe {
     std::mem::transmute::<Vec<ast::Directive<'_>>, Vec<ast::Directive<'static>>>(ast)
@@ -155,8 +157,80 @@ pub fn build_document(text: String, filename: &str) -> Option<Document> {
     inferrence_errors,
     includes,
     accounts,
+    currencies,
     rope,
   })
+}
+
+fn collect_currencies(
+  directives: &[ast::Directive<'_>],
+  inferred: &[core::InferredDirective],
+) -> HashSet<String> {
+  let mut currencies = HashSet::new();
+
+  let mut insert_currency = |value: &str| {
+    let label = value.trim();
+    if !label.is_empty() {
+      currencies.insert(label.to_owned());
+    }
+  };
+
+  for directive in directives {
+    match directive {
+      ast::Directive::Open(open) => {
+        for currency in &open.currencies {
+          insert_currency(currency.content);
+        }
+      }
+      ast::Directive::Balance(balance) => {
+        if let Some(currency) = &balance.amount.currency {
+          insert_currency(currency.content);
+        }
+      }
+      ast::Directive::Commodity(commodity) => {
+        insert_currency(commodity.currency.content)
+      }
+      ast::Directive::Price(price) => {
+        insert_currency(price.currency.content);
+        if let Some(currency) = &price.amount.currency {
+          insert_currency(currency.content);
+        }
+      }
+      ast::Directive::Transaction(tx) => {
+        for posting in &tx.postings {
+          if let Some(amount) = &posting.amount
+            && let Some(currency) = &amount.currency
+          {
+            insert_currency(currency.content);
+          }
+
+          if let Some(cost_spec) = &posting.cost_spec
+            && let Some(amount) = &cost_spec.amount
+            && let Some(currency) = &amount.currency
+          {
+            insert_currency(currency.content);
+          }
+
+          if let Some(price_annotation) = &posting.price_annotation
+            && let Some(currency) = &price_annotation.currency
+          {
+            insert_currency(currency.content);
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  for directive in inferred {
+    if let core::InferredDirective::Transaction(tx) = directive {
+      for posting in &tx.postings {
+        insert_currency(posting.amount.currency.as_str());
+      }
+    }
+  }
+
+  currencies
 }
 
 fn collect_accounts(directives: &[core::Directive]) -> HashSet<String> {

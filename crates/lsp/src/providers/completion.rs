@@ -24,6 +24,10 @@ enum CompletionMode {
     prefix: String,
     range: Range,
   },
+  Currency {
+    prefix: String,
+    range: Range,
+  },
   Keyword {
     prefix: String,
     range: Range,
@@ -321,6 +325,167 @@ fn is_probably_metadata_key(token: &str) -> bool {
     .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
 }
 
+fn is_number_like_token(token: &str) -> bool {
+  let trimmed = token.trim();
+  if trimmed.is_empty() {
+    return false;
+  }
+
+  let has_digit = trimmed.chars().any(|ch| ch.is_ascii_digit());
+  if !has_digit {
+    return false;
+  }
+
+  trimmed.chars().all(|ch| {
+    ch.is_ascii_digit()
+      || matches!(ch, '+' | '-' | '.' | ',' | '_' | '(' | ')' | '*' | '/')
+  })
+}
+
+fn token_index_at_start(line: &str, token_start: usize) -> Option<usize> {
+  let mut index = 0usize;
+  let mut current_start: Option<usize> = None;
+
+  for (idx, ch) in line.char_indices() {
+    if ch.is_whitespace() {
+      if let Some(start) = current_start.take() {
+        if start == token_start {
+          return Some(index);
+        }
+        index += 1;
+      }
+    } else if current_start.is_none() {
+      current_start = Some(idx);
+    }
+  }
+
+  if let Some(start) = current_start
+    && start == token_start {
+      return Some(index);
+    }
+
+  None
+}
+
+fn previous_token_before(line: &str, token_start: usize) -> Option<String> {
+  let prefix = line.get(..token_start)?;
+  let mut last = None;
+  for token in prefix.split_whitespace() {
+    last = Some(token.to_string());
+  }
+  last
+}
+
+fn is_within_currency_context(doc: &Document, byte_idx: usize) -> bool {
+  let span_contains = |span: ast::Span| span.start <= byte_idx && byte_idx <= span.end;
+  let directive = doc.directive_at_offset(byte_idx).or_else(|| {
+    byte_idx
+      .checked_sub(1)
+      .and_then(|idx| doc.directive_at_offset(idx))
+  });
+
+  match directive {
+    Some(ast::Directive::Balance(balance)) => balance
+      .amount
+      .currency
+      .as_ref()
+      .map(|currency| span_contains(currency.span))
+      .unwrap_or(false),
+    Some(ast::Directive::Commodity(commodity)) => {
+      span_contains(commodity.currency.span)
+    }
+    Some(ast::Directive::Price(price)) => {
+      span_contains(price.currency.span)
+        || price
+          .amount
+          .currency
+          .as_ref()
+          .map(|currency| span_contains(currency.span))
+          .unwrap_or(false)
+    }
+    Some(ast::Directive::Transaction(tx)) => tx.postings.iter().any(|posting| {
+      posting
+        .amount
+        .as_ref()
+        .and_then(|amount| amount.currency.as_ref())
+        .map(|currency| span_contains(currency.span))
+        .unwrap_or(false)
+        || posting
+          .cost_spec
+          .as_ref()
+          .and_then(|cost| cost.amount.as_ref())
+          .and_then(|amount| amount.currency.as_ref())
+          .map(|currency| span_contains(currency.span))
+          .unwrap_or(false)
+        || posting
+          .price_annotation
+          .as_ref()
+          .and_then(|amount| amount.currency.as_ref())
+          .map(|currency| span_contains(currency.span))
+          .unwrap_or(false)
+    }),
+    _ => false,
+  }
+}
+
+fn is_probably_currency_context(
+  doc: &Document,
+  position: Position,
+  line_slice: &str,
+  line_start: usize,
+  indent: usize,
+  has_date: bool,
+) -> Option<(String, Range)> {
+  let (prefix, range) = token_prefix_at_position(doc, position, true, true)?;
+  let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
+  if token_start < line_start {
+    return None;
+  }
+
+  let token_start_rel = token_start - line_start;
+  if token_start_rel > line_slice.len() {
+    return None;
+  }
+
+  let token_end = lsp_position_to_byte(&doc.rope, range.end)?;
+  let token = doc.rope.byte_slice(token_start..token_end).to_string();
+
+  if is_probably_metadata_key(token.trim()) {
+    return None;
+  }
+
+  let cursor_byte = lsp_position_to_byte(&doc.rope, position)?;
+  if is_within_currency_context(doc, cursor_byte) {
+    return Some((prefix, range));
+  }
+
+  if indent == 0 && has_date {
+    let token_idx = token_index_at_start(line_slice, token_start_rel)?;
+    let keyword = line_slice
+      .split_whitespace()
+      .nth(1)
+      .map(|v| v.to_ascii_lowercase());
+
+    if let Some(keyword) = keyword {
+      if keyword == "commodity" && token_idx == 2 {
+        return Some((prefix, range));
+      }
+
+      if keyword == "price" && (token_idx == 2 || token_idx >= 4) {
+        return Some((prefix, range));
+      }
+    }
+  }
+
+  if let Some(previous_token) = previous_token_before(line_slice, token_start_rel)
+    && is_number_like_token(&previous_token)
+  {
+    return Some((prefix, range));
+  }
+
+  None
+}
+
 fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
   if line_slice.len() < indent + 10 {
     return false;
@@ -431,6 +596,17 @@ fn determine_completion_context(
       return Some(mode);
     }
 
+    if let Some((prefix, range)) = is_probably_currency_context(
+      doc,
+      position,
+      &line_slice,
+      line_start,
+      indent,
+      has_date,
+    ) {
+      return Some(CompletionMode::Currency { prefix, range });
+    }
+
     if has_date
       && rel >= indent + 10
       && !in_account_context
@@ -480,6 +656,17 @@ fn determine_completion_context(
     return Some(mode);
   }
 
+  if let Some((prefix, range)) = is_probably_currency_context(
+    doc,
+    position,
+    &line_slice,
+    line_start,
+    indent,
+    has_date,
+  ) {
+    return Some(CompletionMode::Currency { prefix, range });
+  }
+
   None
 }
 
@@ -495,6 +682,25 @@ fn fuzzy_match(candidate: &str, prefix: &str) -> bool {
       None => return false,
     }
   }
+  true
+}
+
+fn starts_with_ignore_ascii_case(candidate: &str, prefix: &str) -> bool {
+  if prefix.is_empty() {
+    return true;
+  }
+
+  let mut candidate_chars = candidate.chars();
+  for prefix_char in prefix.chars() {
+    let Some(candidate_char) = candidate_chars.next() else {
+      return false;
+    };
+
+    if !candidate_char.eq_ignore_ascii_case(&prefix_char) {
+      return false;
+    }
+  }
+
   true
 }
 
@@ -535,6 +741,34 @@ pub fn completion(
           text_edit: Some(CompletionTextEdit::Edit(TextEdit {
             range: replace_range,
             new_text: label.clone(),
+          })),
+          ..CompletionItem::default()
+        })
+        .collect()
+    }
+    CompletionMode::Currency {
+      prefix,
+      range: replace_range,
+    } => {
+      let docs: Vec<_> = documents_bfs(documents, root_uri)
+        .into_iter()
+        .map(|(_, doc)| doc)
+        .collect();
+
+      let mut currencies: HashSet<&str> = HashSet::new();
+      for doc in &docs {
+        currencies.extend(doc.currencies.iter().map(String::as_str));
+      }
+
+      currencies
+        .into_iter()
+        .filter(|label| starts_with_ignore_ascii_case(label, &prefix))
+        .map(|label| CompletionItem {
+          label: label.to_owned(),
+          kind: Some(CompletionItemKind::VALUE),
+          text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range: replace_range,
+            new_text: label.to_owned(),
           })),
           ..CompletionItem::default()
         })
@@ -708,6 +942,17 @@ mod tests {
     let ctx = determine_context_helper(lines).expect("expected account context");
     match ctx {
       CompletionMode::Account { range, .. } => {
+        assert_eq!(range.start, start, "unexpected start position");
+        assert_eq!(range.end, end, "unexpected end position");
+      }
+      other => panic!("unexpected completion mode: {other:?}"),
+    }
+  }
+
+  fn assert_currency_range(lines: &[&str], start: Position, end: Position) {
+    let ctx = determine_context_helper(lines).expect("expected currency context");
+    match ctx {
+      CompletionMode::Currency { range, .. } => {
         assert_eq!(range.start, start, "unexpected start position");
         assert_eq!(range.end, end, "unexpected end position");
       }
@@ -985,6 +1230,257 @@ mod tests {
     assert!(
       response.is_none(),
       "expected no account completion in amount field"
+    );
+  }
+
+  #[test]
+  fn completes_currency_in_amount_field() {
+    let open_uri = Url::from_str("file:///open.bean").unwrap();
+    let open_content = "2020-01-01 open Assets:Cash CNY USD\n";
+    let open_doc = build_doc(&open_uri, open_content);
+
+    let lines = [
+      r#"2022-01-02 * "..." "...""#,
+      r#"  Expenses:Food"#,
+      r#"  Assets:Cash                                 100 C|"#,
+    ];
+    let (tx_doc, position) = doc_with_cursor(&lines);
+    let tx_uri = Url::from_str("file:///txn.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(open_uri.clone(), open_doc);
+    documents.insert(tx_uri.clone(), tx_doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier {
+          uri: tx_uri.clone(),
+        },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &open_uri, &params));
+    assert!(
+      items.iter().any(|item| item.label == "CNY"),
+      "expected currency completion in amount field"
+    );
+  }
+
+  #[test]
+  fn context_allows_currency_in_posting_amount() {
+    let lines = [
+      r#"2022-01-02 * "..." "...""#,
+      r#"  Expenses:Food"#,
+      r#"  Assets:Cash                                 100 CN|"#,
+    ];
+
+    assert_currency_range(&lines, Position::new(2, 50), Position::new(2, 52));
+  }
+
+  #[test]
+  fn completes_currency_on_commodity_directive() {
+    let source_uri = Url::from_str("file:///source-currency.bean").unwrap();
+    let source_content = "2020-01-01 open Assets:Cash CNY USD\n";
+    let source_doc = build_doc(&source_uri, source_content);
+
+    let lines = [r#"2022-01-01 commodity C|"#];
+    let (cursor_doc, position) = doc_with_cursor(&lines);
+    let cursor_uri = Url::from_str("file:///commodity-cursor.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(source_uri.clone(), source_doc);
+    documents.insert(cursor_uri.clone(), cursor_doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier {
+          uri: cursor_uri.clone(),
+        },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &source_uri, &params));
+    assert!(
+      items.iter().any(|item| item.label == "CNY"),
+      "expected CNY completion on commodity directive"
+    );
+  }
+
+  #[test]
+  fn completes_currency_on_price_directive() {
+    let source_uri = Url::from_str("file:///source-price.bean").unwrap();
+    let source_content =
+      "2020-01-01 * \"...\" \"...\"\n  Assets:Cash -10 USD\n  Expenses:Food\n";
+    let source_doc = build_doc(&source_uri, source_content);
+
+    let lines = [r#"2022-01-01 price U|"#];
+    let (cursor_doc, position) = doc_with_cursor(&lines);
+    let cursor_uri = Url::from_str("file:///price-cursor.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(source_uri.clone(), source_doc);
+    documents.insert(cursor_uri.clone(), cursor_doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier {
+          uri: cursor_uri.clone(),
+        },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &source_uri, &params));
+    assert!(
+      items.iter().any(|item| item.label == "USD"),
+      "expected USD completion on price directive"
+    );
+  }
+
+  #[test]
+  fn dedupes_and_sorts_currency_suggestions() {
+    let a_uri = Url::from_str("file:///a.bean").unwrap();
+    let a_content = "2020-01-01 open Assets:Cash USD CNY\n";
+    let a_doc = build_doc(&a_uri, a_content);
+
+    let b_uri = Url::from_str("file:///b.bean").unwrap();
+    let b_content =
+      "2020-01-01 * \"...\" \"...\"\n  Assets:Cash -1 EUR\n  Expenses:Food\n";
+    let b_doc = build_doc(&b_uri, b_content);
+
+    let lines = [
+      r#"2022-01-02 * "..." "...""#,
+      r#"  Expenses:Food"#,
+      r#"  Assets:Cash                           1 |"#,
+    ];
+    let (cursor_doc, position) = doc_with_cursor(&lines);
+    let cursor_uri = Url::from_str("file:///cursor.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(a_uri.clone(), a_doc);
+    documents.insert(b_uri.clone(), b_doc);
+    documents.insert(cursor_uri.clone(), cursor_doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier {
+          uri: cursor_uri.clone(),
+        },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &a_uri, &params));
+    let labels: Vec<String> = items.into_iter().map(|item| item.label).collect();
+
+    assert!(labels.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert_eq!(
+      labels
+        .iter()
+        .filter(|label| label.as_str() == "USD")
+        .count(),
+      1,
+      "expected duplicate USD suggestions to be removed"
+    );
+  }
+
+  #[test]
+  fn completes_currency_with_utf16_position() {
+    let lines = [
+      r#"2021-12-31 open Assets:Cash CNY"#,
+      r#"2022-01-01 * "🍣" "...""#,
+      r#"  Assets:Cash -1 CN|"#,
+      r#"  Expenses:Food"#,
+    ];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///currency-utf16.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &uri, &params));
+    assert!(
+      items.iter().any(|item| item.label == "CNY"),
+      "expected currency completion with utf16-aware position"
+    );
+  }
+
+  #[test]
+  fn currency_completion_uses_prefix_not_subsequence() {
+    let source_uri = Url::from_str("file:///source-prefix.bean").unwrap();
+    let source_content = "2020-01-01 open Assets:Cash CNY USD\n";
+    let source_doc = build_doc(&source_uri, source_content);
+
+    let lines = [
+      r#"2022-01-02 * "..." "...""#,
+      r#"  Expenses:Food"#,
+      r#"  Assets:Cash                                 100 ny|"#,
+    ];
+    let (cursor_doc, position) = doc_with_cursor(&lines);
+    let cursor_uri = Url::from_str("file:///cursor-prefix.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(source_uri.clone(), source_doc);
+    documents.insert(cursor_uri.clone(), cursor_doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier {
+          uri: cursor_uri.clone(),
+        },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let response = completion(&documents, &source_uri, &params);
+    assert!(
+      response.is_none(),
+      "expected no currency completion for non-prefix input"
     );
   }
 
