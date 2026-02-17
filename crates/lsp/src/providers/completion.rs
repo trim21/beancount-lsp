@@ -5,12 +5,13 @@ use beancount_core as core;
 use beancount_parser::ast;
 use tower_lsp_server::ls_types::{
   CompletionItem, CompletionItemKind, CompletionList, CompletionParams,
-  CompletionTextEdit, Position, Range, TextEdit, Uri as Url,
+  CompletionTextEdit, Position, TextEdit, Uri as Url,
 };
 
-use crate::providers::account::account_at_position;
+use crate::providers::completion_context::{
+  CompletionMode, determine_completion_context as determine_completion_context_inner,
+};
 use crate::server::{Document, documents_bfs, find_document};
-use crate::text::{byte_to_lsp_position, lsp_position_to_byte};
 
 const DATE_KEYWORDS: &[&str] =
   &["custom", "balance", "open", "close", "note", "price", "pad"];
@@ -18,656 +19,11 @@ const ROOT_KEYWORDS: &[&str] = &[
   "include", "option", "pushtag", "poptag", "pushmeta", "popmeta",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CompletionMode {
-  Account {
-    prefix: String,
-    range: Range,
-  },
-  Currency {
-    prefix: String,
-    range: Range,
-  },
-  Keyword {
-    prefix: String,
-    range: Range,
-    variants: &'static [&'static str],
-  },
-  Tag {
-    prefix: String,
-    range: Range,
-  },
-  Link {
-    prefix: String,
-    range: Range,
-  },
-}
-
-fn token_prefix_at_position(
-  doc: &Document,
+fn determine_completion_context<'a>(
+  doc: &'a Document,
   position: Position,
-  require_nonzero_start: bool,
-  allow_empty_token: bool,
-) -> Option<(String, Range)> {
-  let cursor_byte = lsp_position_to_byte(&doc.rope, position)?;
-
-  let line = doc.rope.byte_to_line(cursor_byte);
-  let line_start = doc.rope.line_to_byte(line);
-  let line_end = if line + 1 < doc.rope.len_lines() {
-    doc.rope.line_to_byte(line + 1)
-  } else {
-    doc.rope.len_bytes()
-  };
-
-  if cursor_byte < line_start || cursor_byte > line_end {
-    return None;
-  }
-
-  let rel = cursor_byte - line_start;
-  let line_slice = doc.rope.byte_slice(line_start..line_end).to_string();
-  if rel > line_slice.len() {
-    return None;
-  }
-
-  let mut start = 0;
-  for (idx, ch) in line_slice.char_indices() {
-    if idx >= rel {
-      break;
-    }
-    if ch.is_whitespace() {
-      start = idx + ch.len_utf8();
-    }
-  }
-
-  let mut end = line_slice.len();
-  for (idx, ch) in line_slice.char_indices() {
-    if idx < rel {
-      continue;
-    }
-    if ch.is_whitespace() {
-      end = idx;
-      break;
-    }
-  }
-
-  if start > end || rel > end {
-    return None;
-  }
-
-  if require_nonzero_start && start == 0 {
-    return None;
-  }
-
-  let token = line_slice.get(start..end)?;
-  let prefix = line_slice.get(start..rel)?.to_owned();
-  if token.is_empty() && !allow_empty_token {
-    return None;
-  }
-
-  let start_byte = line_start + start;
-  let end_byte = line_start + end;
-  let start_pos = byte_to_lsp_position(&doc.rope, start_byte)?;
-  let end_pos = byte_to_lsp_position(&doc.rope, end_byte)?;
-
-  Some((
-    prefix,
-    Range {
-      start: start_pos,
-      end: end_pos,
-    },
-  ))
-}
-
-fn marker_prefix_at_position(
-  doc: &Document,
-  position: Position,
-  marker: char,
-) -> Option<(String, Range)> {
-  let (_token_prefix, token_range) =
-    token_prefix_at_position(doc, position, true, true)?;
-
-  let token_start = lsp_position_to_byte(&doc.rope, token_range.start)?;
-  let token_end = lsp_position_to_byte(&doc.rope, token_range.end)?;
-  if token_start >= token_end {
-    return None;
-  }
-
-  let token_text = doc.rope.byte_slice(token_start..token_end).to_string();
-  if !token_text.starts_with(marker) {
-    return None;
-  }
-
-  let cursor_byte = lsp_position_to_byte(&doc.rope, position)?;
-  let after_hash = token_start + 1;
-  if cursor_byte < after_hash {
-    return None;
-  }
-
-  let prefix = doc.rope.byte_slice(after_hash..cursor_byte).to_string();
-
-  let start_pos = byte_to_lsp_position(&doc.rope, after_hash)?;
-  Some((
-    prefix,
-    Range {
-      start: start_pos,
-      end: token_range.end,
-    },
-  ))
-}
-
-fn is_within_account_context(doc: &Document, byte_idx: usize) -> bool {
-  let span_contains = |span: ast::Span| span.start <= byte_idx && byte_idx <= span.end;
-  let directive = doc.directive_at_offset(byte_idx).or_else(|| {
-    byte_idx
-      .checked_sub(1)
-      .and_then(|idx| doc.directive_at_offset(idx))
-  });
-
-  match directive {
-    Some(ast::Directive::Open(open)) => span_contains(open.account.span),
-    Some(ast::Directive::Balance(balance)) => span_contains(balance.account.span),
-    Some(ast::Directive::Pad(pad)) => {
-      span_contains(pad.account.span) || span_contains(pad.from_account.span)
-    }
-    Some(ast::Directive::Close(close)) => span_contains(close.account.span),
-    Some(ast::Directive::Transaction(tx)) => {
-      tx.postings.iter().any(|p| span_contains(p.account.span))
-    }
-    Some(ast::Directive::Raw(_raw)) => {
-      let Some(position) = byte_to_lsp_position(&doc.rope, byte_idx) else {
-        return false;
-      };
-
-      // Try the account finder, which includes a text fallback for partial raw content.
-      if account_at_position(doc, position).is_some() {
-        return true;
-      }
-
-      // When the parser falls back to Raw directives, the cursor may still be inside a
-      // transaction body. In that case we still want to offer account completion.
-      is_in_transaction_body_line(doc, byte_idx)
-    }
-    None => is_in_transaction_body_line(doc, byte_idx),
-    _ => false,
-  }
-}
-
-fn line_indent(doc: &Document, line: usize) -> Option<(usize, bool)> {
-  if line >= doc.rope.len_lines() {
-    return None;
-  }
-
-  let line_start = doc.rope.line_to_byte(line);
-  let line_end = if line + 1 < doc.rope.len_lines() {
-    doc.rope.line_to_byte(line + 1)
-  } else {
-    doc.rope.len_bytes()
-  };
-
-  let text = doc.rope.byte_slice(line_start..line_end).to_string();
-  let trimmed = text.trim_start();
-  let indent = text.len().saturating_sub(trimmed.len());
-  let is_empty = trimmed.trim().is_empty();
-  Some((indent, is_empty))
-}
-
-fn directive_starts_indented(doc: &Document, directive: &ast::Directive<'_>) -> bool {
-  let span = Document::directive_span(directive);
-  let Some(start_pos) = byte_to_lsp_position(&doc.rope, span.start) else {
-    return false;
-  };
-  let Ok(line) = usize::try_from(start_pos.line) else {
-    return false;
-  };
-  line_indent(doc, line)
-    .map(|(indent, _)| indent > 0)
-    .unwrap_or(false)
-}
-
-fn directive_index_before_line(doc: &Document, line: usize) -> Option<usize> {
-  let mut last_idx = None;
-  for (idx, directive) in doc.ast().iter().enumerate() {
-    let span = Document::directive_span(directive);
-    let Some(start_pos) = byte_to_lsp_position(&doc.rope, span.start) else {
-      continue;
-    };
-    let Ok(start_line) = usize::try_from(start_pos.line) else {
-      continue;
-    };
-
-    if start_line < line {
-      last_idx = Some(idx);
-    }
-  }
-  last_idx
-}
-
-fn is_in_transaction_body_line(doc: &Document, byte_idx: usize) -> bool {
-  let Some(position) = byte_to_lsp_position(&doc.rope, byte_idx) else {
-    return false;
-  };
-
-  let Ok(line) = usize::try_from(position.line) else {
-    return false;
-  };
-
-  // Only for indented lines.
-  let Some((indent, _is_empty)) = line_indent(doc, line) else {
-    return false;
-  };
-  if indent == 0 {
-    return false;
-  }
-
-  // The transaction header may be in a previous AST directive (Transaction), while the current
-  // line is a broken/empty posting line that might not belong to any directive span.
-  // Find the previous directive by line number and scan backwards.
-  let Some(idx) = directive_index_before_line(doc, line) else {
-    return false;
-  };
-
-  let directives = doc.ast();
-  for prev in directives[..=idx].iter().rev() {
-    match prev {
-      ast::Directive::Transaction(_) => return true,
-      // Indented raw/comment lines can be part of a transaction body; keep scanning.
-      ast::Directive::Raw(_) | ast::Directive::Comment(_) => {
-        if directive_starts_indented(doc, prev) {
-          continue;
-        }
-        return false;
-      }
-      _ => return false,
-    }
-  }
-
-  false
-}
-
-fn is_tag_or_link_capable_directive(
-  doc: &Document,
-  byte_idx: usize,
-  line_slice: &str,
-  indent: usize,
-  position: Position,
-) -> bool {
-  let directive = doc.directive_at_offset(byte_idx).or_else(|| {
-    byte_idx
-      .checked_sub(1)
-      .and_then(|idx| doc.directive_at_offset(idx))
-  });
-
-  match directive {
-    Some(ast::Directive::Transaction(_)) | Some(ast::Directive::Document(_)) => true,
-    Some(ast::Directive::Raw(_)) => {
-      has_date_prefix(line_slice, indent)
-        && (marker_prefix_at_position(doc, position, '#').is_some()
-          || marker_prefix_at_position(doc, position, '^').is_some())
-    }
-    _ => false,
-  }
-}
-
-fn is_probably_metadata_key(token: &str) -> bool {
-  // Beancount transaction metadata keys are typically like `foo:` (lowercase + trailing colon).
-  // We avoid treating those as account completion contexts.
-  if !token.ends_with(':') {
-    return false;
-  }
-
-  let key = &token[..token.len().saturating_sub(1)];
-  if key.is_empty() {
-    return false;
-  }
-
-  key
-    .chars()
-    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
-}
-
-fn is_number_like_token(token: &str) -> bool {
-  let trimmed = token.trim();
-  if trimmed.is_empty() {
-    return false;
-  }
-
-  let has_digit = trimmed.chars().any(|ch| ch.is_ascii_digit());
-  if !has_digit {
-    return false;
-  }
-
-  trimmed.chars().all(|ch| {
-    ch.is_ascii_digit()
-      || matches!(ch, '+' | '-' | '.' | ',' | '_' | '(' | ')' | '*' | '/')
-  })
-}
-
-fn token_index_at_start(line: &str, token_start: usize) -> Option<usize> {
-  let mut index = 0usize;
-  let mut current_start: Option<usize> = None;
-
-  for (idx, ch) in line.char_indices() {
-    if ch.is_whitespace() {
-      if let Some(start) = current_start.take() {
-        if start == token_start {
-          return Some(index);
-        }
-        index += 1;
-      }
-    } else if current_start.is_none() {
-      current_start = Some(idx);
-    }
-  }
-
-  if let Some(start) = current_start
-    && start == token_start {
-      return Some(index);
-    }
-
-  None
-}
-
-fn previous_token_before(line: &str, token_start: usize) -> Option<String> {
-  let prefix = line.get(..token_start)?;
-  let mut last = None;
-  for token in prefix.split_whitespace() {
-    last = Some(token.to_string());
-  }
-  last
-}
-
-fn is_within_currency_context(doc: &Document, byte_idx: usize) -> bool {
-  let span_contains = |span: ast::Span| span.start <= byte_idx && byte_idx <= span.end;
-  let directive = doc.directive_at_offset(byte_idx).or_else(|| {
-    byte_idx
-      .checked_sub(1)
-      .and_then(|idx| doc.directive_at_offset(idx))
-  });
-
-  match directive {
-    Some(ast::Directive::Balance(balance)) => balance
-      .amount
-      .currency
-      .as_ref()
-      .map(|currency| span_contains(currency.span))
-      .unwrap_or(false),
-    Some(ast::Directive::Commodity(commodity)) => {
-      span_contains(commodity.currency.span)
-    }
-    Some(ast::Directive::Price(price)) => {
-      span_contains(price.currency.span)
-        || price
-          .amount
-          .currency
-          .as_ref()
-          .map(|currency| span_contains(currency.span))
-          .unwrap_or(false)
-    }
-    Some(ast::Directive::Transaction(tx)) => tx.postings.iter().any(|posting| {
-      posting
-        .amount
-        .as_ref()
-        .and_then(|amount| amount.currency.as_ref())
-        .map(|currency| span_contains(currency.span))
-        .unwrap_or(false)
-        || posting
-          .cost_spec
-          .as_ref()
-          .and_then(|cost| cost.amount.as_ref())
-          .and_then(|amount| amount.currency.as_ref())
-          .map(|currency| span_contains(currency.span))
-          .unwrap_or(false)
-        || posting
-          .price_annotation
-          .as_ref()
-          .and_then(|amount| amount.currency.as_ref())
-          .map(|currency| span_contains(currency.span))
-          .unwrap_or(false)
-    }),
-    _ => false,
-  }
-}
-
-fn is_probably_currency_context(
-  doc: &Document,
-  position: Position,
-  line_slice: &str,
-  line_start: usize,
-  indent: usize,
-  has_date: bool,
-) -> Option<(String, Range)> {
-  let (prefix, range) = token_prefix_at_position(doc, position, true, true)?;
-  let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
-  if token_start < line_start {
-    return None;
-  }
-
-  let token_start_rel = token_start - line_start;
-  if token_start_rel > line_slice.len() {
-    return None;
-  }
-
-  let token_end = lsp_position_to_byte(&doc.rope, range.end)?;
-  let token = doc.rope.byte_slice(token_start..token_end).to_string();
-
-  if is_probably_metadata_key(token.trim()) {
-    return None;
-  }
-
-  let cursor_byte = lsp_position_to_byte(&doc.rope, position)?;
-  if is_within_currency_context(doc, cursor_byte) {
-    return Some((prefix, range));
-  }
-
-  if indent == 0 && has_date {
-    let token_idx = token_index_at_start(line_slice, token_start_rel)?;
-    let keyword = line_slice
-      .split_whitespace()
-      .nth(1)
-      .map(|v| v.to_ascii_lowercase());
-
-    if let Some(keyword) = keyword {
-      if keyword == "commodity" && token_idx == 2 {
-        return Some((prefix, range));
-      }
-
-      if keyword == "price" && (token_idx == 2 || token_idx >= 4) {
-        return Some((prefix, range));
-      }
-    }
-  }
-
-  if let Some(previous_token) = previous_token_before(line_slice, token_start_rel)
-    && is_number_like_token(&previous_token)
-  {
-    return Some((prefix, range));
-  }
-
-  None
-}
-
-fn has_date_prefix(line_slice: &str, indent: usize) -> bool {
-  if line_slice.len() < indent + 10 {
-    return false;
-  }
-
-  let bytes = line_slice.as_bytes();
-  let window = &bytes[indent..indent + 10];
-  let is_digit = |b: u8| b.is_ascii_digit();
-
-  if !(is_digit(window[0])
-    && is_digit(window[1])
-    && is_digit(window[2])
-    && is_digit(window[3])
-    && window[4] == b'-'
-    && is_digit(window[5])
-    && is_digit(window[6])
-    && window[7] == b'-'
-    && is_digit(window[8])
-    && is_digit(window[9]))
-  {
-    return false;
-  }
-
-  if line_slice.len() == indent + 10 {
-    return true;
-  }
-
-  line_slice
-    .get(indent + 10..)
-    .and_then(|rest| rest.chars().next())
-    .map(|c| c.is_whitespace())
-    .unwrap_or(false)
-}
-
-fn determine_completion_context(
-  doc: &Document,
-  position: Position,
-) -> Option<CompletionMode> {
-  let cursor_byte = lsp_position_to_byte(&doc.rope, position)?;
-
-  let line = doc.rope.byte_to_line(cursor_byte);
-  let line_start = doc.rope.line_to_byte(line);
-  let line_end = if line + 1 < doc.rope.len_lines() {
-    doc.rope.line_to_byte(line + 1)
-  } else {
-    doc.rope.len_bytes()
-  };
-
-  let rel = cursor_byte - line_start;
-  let line_slice = doc.rope.byte_slice(line_start..line_end).to_string();
-  let trimmed = line_slice.trim_start();
-  let indent = line_slice.len().saturating_sub(trimmed.len());
-  let has_date = has_date_prefix(&line_slice, indent);
-
-  let in_account_context = is_within_account_context(doc, cursor_byte);
-  let supports_tag_link =
-    is_tag_or_link_capable_directive(doc, cursor_byte, &line_slice, indent, position);
-
-  let account_mode = || {
-    if in_account_context
-      && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, true)
-    {
-      // Avoid treating amount/price fields as accounts; require token to start alphabetic.
-      let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
-      let token_end = lsp_position_to_byte(&doc.rope, range.end)?;
-      let token = doc.rope.byte_slice(token_start..token_end).to_string();
-      if indent > 0 && range.start.character != u32::try_from(indent).ok()? {
-        return None;
-      }
-      if is_probably_metadata_key(token.trim()) {
-        return None;
-      }
-      if token.is_empty() {
-        return Some(CompletionMode::Account { prefix, range });
-      }
-      if token
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_alphabetic())
-        .unwrap_or(false)
-      {
-        return Some(CompletionMode::Account { prefix, range });
-      }
-    }
-
-    None
-  };
-
-  if indent == 0 {
-    // For non-indented directive lines, prioritize marker-based completion first
-    // (`#tag` / `^link`), then account completion, and finally directive keywords.
-    // Only Transaction/Document directives are eligible for tag/link completion.
-    if has_date
-      && supports_tag_link
-      && let Some((prefix, range)) = marker_prefix_at_position(doc, position, '#')
-    {
-      return Some(CompletionMode::Tag { prefix, range });
-    }
-
-    if has_date
-      && supports_tag_link
-      && let Some((prefix, range)) = marker_prefix_at_position(doc, position, '^')
-    {
-      return Some(CompletionMode::Link { prefix, range });
-    }
-
-    if let Some(mode) = account_mode() {
-      return Some(mode);
-    }
-
-    if let Some((prefix, range)) = is_probably_currency_context(
-      doc,
-      position,
-      &line_slice,
-      line_start,
-      indent,
-      has_date,
-    ) {
-      return Some(CompletionMode::Currency { prefix, range });
-    }
-
-    if has_date
-      && rel >= indent + 10
-      && !in_account_context
-      && let Some((prefix, range)) =
-        token_prefix_at_position(doc, position, false, true)
-      && DATE_KEYWORDS
-        .iter()
-        .any(|label| fuzzy_match(label, &prefix))
-    {
-      return Some(CompletionMode::Keyword {
-        prefix,
-        range,
-        variants: DATE_KEYWORDS,
-      });
-    }
-
-    if !in_account_context
-      && let Some((prefix, range)) =
-        token_prefix_at_position(doc, position, false, true)
-      && ROOT_KEYWORDS
-        .iter()
-        .any(|label| fuzzy_match(label, &prefix))
-    {
-      return Some(CompletionMode::Keyword {
-        prefix,
-        range,
-        variants: ROOT_KEYWORDS,
-      });
-    }
-
-    return None;
-  }
-
-  if has_date && supports_tag_link {
-    for marker in ['#', '^'] {
-      if let Some((prefix, range)) = marker_prefix_at_position(doc, position, marker) {
-        return Some(match marker {
-          '#' => CompletionMode::Tag { prefix, range },
-          '^' => CompletionMode::Link { prefix, range },
-          _ => unreachable!(),
-        });
-      }
-    }
-  }
-
-  if let Some(mode) = account_mode() {
-    return Some(mode);
-  }
-
-  if let Some((prefix, range)) = is_probably_currency_context(
-    doc,
-    position,
-    &line_slice,
-    line_start,
-    indent,
-    has_date,
-  ) {
-    return Some(CompletionMode::Currency { prefix, range });
-  }
-
-  None
+) -> Option<CompletionMode<'a>> {
+  determine_completion_context_inner(doc, position, DATE_KEYWORDS, ROOT_KEYWORDS)
 }
 
 fn fuzzy_match(candidate: &str, prefix: &str) -> bool {
@@ -704,6 +60,39 @@ fn starts_with_ignore_ascii_case(candidate: &str, prefix: &str) -> bool {
   true
 }
 
+fn completion_item_with_edit(
+  label: String,
+  kind: CompletionItemKind,
+  range: tower_lsp_server::ls_types::Range,
+) -> CompletionItem {
+  let new_text = label.clone();
+  CompletionItem {
+    label,
+    kind: Some(kind),
+    text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
+    ..CompletionItem::default()
+  }
+}
+
+fn insert_label<'a>(labels: &mut HashSet<&'a str>, label: &'a str) {
+  if !label.is_empty() {
+    labels.insert(label);
+  }
+}
+
+fn insert_link_label<'a>(
+  labels: &mut HashSet<&'a str>,
+  content: &'a str,
+  require_caret_prefix: bool,
+) {
+  if require_caret_prefix && !content.starts_with('^') {
+    return;
+  }
+
+  let label = content.trim_start_matches('^');
+  insert_label(labels, label);
+}
+
 pub fn completion(
   documents: &HashMap<Url, Arc<Document>>,
   root_uri: &Url,
@@ -727,22 +116,25 @@ pub fn completion(
       prefix,
       range: replace_range,
     } => {
+      let docs: Vec<_> = documents_bfs(documents, root_uri)
+        .into_iter()
+        .map(|(_, doc)| doc)
+        .collect();
+
       let mut accounts = HashSet::new();
-      for (_, doc) in documents_bfs(documents, root_uri) {
-        accounts.extend(doc.accounts.iter().cloned());
+      for doc in &docs {
+        accounts.extend(doc.accounts.iter().map(String::as_str));
       }
 
       accounts
         .into_iter()
-        .filter(|label| fuzzy_match(label, &prefix))
-        .map(|label| CompletionItem {
-          label: label.clone(),
-          kind: Some(CompletionItemKind::VALUE),
-          text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-            range: replace_range,
-            new_text: label.clone(),
-          })),
-          ..CompletionItem::default()
+        .filter(|label| fuzzy_match(label, prefix))
+        .map(|label| {
+          completion_item_with_edit(
+            label.to_string(),
+            CompletionItemKind::VALUE,
+            replace_range,
+          )
         })
         .collect()
     }
@@ -755,22 +147,20 @@ pub fn completion(
         .map(|(_, doc)| doc)
         .collect();
 
-      let mut currencies: HashSet<&str> = HashSet::new();
+      let mut currencies = HashSet::new();
       for doc in &docs {
         currencies.extend(doc.currencies.iter().map(String::as_str));
       }
 
       currencies
         .into_iter()
-        .filter(|label| starts_with_ignore_ascii_case(label, &prefix))
-        .map(|label| CompletionItem {
-          label: label.to_owned(),
-          kind: Some(CompletionItemKind::VALUE),
-          text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-            range: replace_range,
-            new_text: label.to_owned(),
-          })),
-          ..CompletionItem::default()
+        .filter(|label| starts_with_ignore_ascii_case(label, prefix))
+        .map(|label| {
+          completion_item_with_edit(
+            label.to_string(),
+            CompletionItemKind::VALUE,
+            replace_range,
+          )
         })
         .collect()
     }
@@ -782,28 +172,29 @@ pub fn completion(
       .iter()
       .copied()
       .filter(|label| fuzzy_match(label, &prefix))
-      .map(|label| CompletionItem {
-        label: label.to_string(),
-        kind: Some(CompletionItemKind::KEYWORD),
-        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-          range: replace_range,
-          new_text: label.to_string(),
-        })),
-        ..CompletionItem::default()
+      .map(|label| {
+        completion_item_with_edit(
+          label.to_string(),
+          CompletionItemKind::KEYWORD,
+          replace_range,
+        )
       })
       .collect(),
     CompletionMode::Tag {
       prefix,
       range: replace_range,
     } => {
+      let docs: Vec<_> = documents_bfs(documents, root_uri)
+        .into_iter()
+        .map(|(_, doc)| doc)
+        .collect();
+
       let mut tags = HashSet::new();
-      for (_, doc) in documents_bfs(documents, root_uri) {
+      for doc in &docs {
         for dir in &doc.directives {
           if let core::Directive::Transaction(tx) = dir {
             for tag in &tx.tags {
-              if !tag.is_empty() {
-                tags.insert(tag.clone());
-              }
+              insert_label(&mut tags, tag.as_str());
             }
           }
         }
@@ -811,15 +202,13 @@ pub fn completion(
 
       tags
         .into_iter()
-        .filter(|label| fuzzy_match(label, &prefix))
-        .map(|label| CompletionItem {
-          label: label.clone(),
-          kind: Some(CompletionItemKind::KEYWORD),
-          text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-            range: replace_range,
-            new_text: label.clone(),
-          })),
-          ..CompletionItem::default()
+        .filter(|label| fuzzy_match(label, prefix))
+        .map(|label| {
+          completion_item_with_edit(
+            label.to_string(),
+            CompletionItemKind::KEYWORD,
+            replace_range,
+          )
         })
         .collect()
     }
@@ -827,32 +216,28 @@ pub fn completion(
       prefix,
       range: replace_range,
     } => {
+      let docs: Vec<_> = documents_bfs(documents, root_uri)
+        .into_iter()
+        .map(|(_, doc)| doc)
+        .collect();
+
       let mut links = HashSet::new();
-      for (_, doc) in documents_bfs(documents, root_uri) {
+      for doc in &docs {
         for dir in doc.ast() {
           match dir {
             ast::Directive::Transaction(tx) => {
               for link in &tx.links {
-                let label = link.content.trim_start_matches('^');
-                if !label.is_empty() {
-                  links.insert(label.to_string());
-                }
+                insert_link_label(&mut links, &link.content, false);
               }
             }
             ast::Directive::Document(document) => {
               for link in &document.links {
-                let label = link.content.trim_start_matches('^');
-                if !label.is_empty() {
-                  links.insert(label.to_string());
-                }
+                insert_link_label(&mut links, &link.content, false);
               }
 
               if let Some(tags_links) = &document.tags_links {
                 for item in tags_links {
-                  let label = item.content.trim_start_matches('^');
-                  if item.content.starts_with('^') && !label.is_empty() {
-                    links.insert(label.to_string());
-                  }
+                  insert_link_label(&mut links, &item.content, true);
                 }
               }
             }
@@ -863,15 +248,13 @@ pub fn completion(
 
       links
         .into_iter()
-        .filter(|label| fuzzy_match(label, &prefix))
-        .map(|label| CompletionItem {
-          label: label.clone(),
-          kind: Some(CompletionItemKind::KEYWORD),
-          text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-            range: replace_range,
-            new_text: label.clone(),
-          })),
-          ..CompletionItem::default()
+        .filter(|label| fuzzy_match(label, prefix))
+        .map(|label| {
+          completion_item_with_edit(
+            label.to_string(),
+            CompletionItemKind::KEYWORD,
+            replace_range,
+          )
         })
         .collect()
     }
@@ -929,35 +312,8 @@ mod tests {
     (Arc::new(doc), cursor)
   }
 
-  fn determine_context_helper(lines: &[&str]) -> Option<CompletionMode> {
-    let (doc, pos) = doc_with_cursor(lines);
-    determine_completion_context(doc.as_ref(), pos)
-  }
-
   fn completion_items(response: Option<CompletionList>) -> Vec<CompletionItem> {
     response.expect("got completion").items
-  }
-
-  fn assert_account_range(lines: &[&str], start: Position, end: Position) {
-    let ctx = determine_context_helper(lines).expect("expected account context");
-    match ctx {
-      CompletionMode::Account { range, .. } => {
-        assert_eq!(range.start, start, "unexpected start position");
-        assert_eq!(range.end, end, "unexpected end position");
-      }
-      other => panic!("unexpected completion mode: {other:?}"),
-    }
-  }
-
-  fn assert_currency_range(lines: &[&str], start: Position, end: Position) {
-    let ctx = determine_context_helper(lines).expect("expected currency context");
-    match ctx {
-      CompletionMode::Currency { range, .. } => {
-        assert_eq!(range.start, start, "unexpected start position");
-        assert_eq!(range.end, end, "unexpected end position");
-      }
-      other => panic!("unexpected completion mode: {other:?}"),
-    }
   }
 
   fn build_doc(uri: &Url, content: &str) -> Arc<Document> {
@@ -1030,41 +386,6 @@ mod tests {
     assert!(
       !items.is_empty(),
       "expected root keyword completions at document root"
-    );
-  }
-
-  #[test]
-  fn context_allows_balance_account() {
-    let lines = [r#"2025-10-10 balance Assets:Bank:CCB:C6485|"#];
-
-    assert_account_range(&lines, Position::new(0, 19), Position::new(0, 40));
-  }
-
-  #[test]
-  fn context_allows_open_account() {
-    let lines = [r#"2025-10-10 open Assets:Cash|"#];
-
-    assert_account_range(&lines, Position::new(0, 16), Position::new(0, 27));
-  }
-
-  #[test]
-  fn context_allows_posting_account_when_indented() {
-    let lines = [
-      r#"2025-10-10 * "Payee" "Narration""#,
-      r#"  Assets:Cash:Wallet|"#,
-    ];
-
-    assert_account_range(&lines, Position::new(1, 2), Position::new(1, 20));
-  }
-
-  #[test]
-  fn context_rejects_top_level_word() {
-    let lines = [r#"word|"#];
-
-    let ctx = determine_context_helper(&lines);
-    assert!(
-      ctx.is_none(),
-      "expected no account context at document root"
     );
   }
 
@@ -1271,17 +592,6 @@ mod tests {
       items.iter().any(|item| item.label == "CNY"),
       "expected currency completion in amount field"
     );
-  }
-
-  #[test]
-  fn context_allows_currency_in_posting_amount() {
-    let lines = [
-      r#"2022-01-02 * "..." "...""#,
-      r#"  Expenses:Food"#,
-      r#"  Assets:Cash                                 100 CN|"#,
-    ];
-
-    assert_currency_range(&lines, Position::new(2, 50), Position::new(2, 52));
   }
 
   #[test]

@@ -12,6 +12,7 @@ pyo3 = ["dep:pyo3"]
 anyhow = "1.0.101"
 beancount-core = { workspace = true }
 beancount-parser = { workspace = true }
+chumsky = { workspace = true }
 clap = { version = "4.5.59", features = ["derive"] }
 glob = "0.3.3"
 lru = "0.16.3"
