@@ -24,4 +24,7 @@ jobs:
           path: dist
 
       - uses: astral-sh/setup-uv@v7
+        with:
+          github-token: '${{ github.token }}'
+
       - run: uv publish
