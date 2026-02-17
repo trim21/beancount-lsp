@@ -294,9 +294,7 @@ fn is_tag_or_link_capable_directive(
   });
 
   match directive {
-    Some(ast::Directive::Transaction(_)) | Some(ast::Directive::Document(_)) => {
-      true
-    }
+    Some(ast::Directive::Transaction(_)) | Some(ast::Directive::Document(_)) => true,
     Some(ast::Directive::Raw(_)) => {
       has_date_prefix(line_slice, indent)
         && (marker_prefix_at_position(doc, position, '#').is_some()
@@ -378,13 +376,8 @@ fn determine_completion_context(
   let has_date = has_date_prefix(&line_slice, indent);
 
   let in_account_context = is_within_account_context(doc, cursor_byte);
-  let supports_tag_link = is_tag_or_link_capable_directive(
-    doc,
-    cursor_byte,
-    &line_slice,
-    indent,
-    position,
-  );
+  let supports_tag_link =
+    is_tag_or_link_capable_directive(doc, cursor_byte, &line_slice, indent, position);
 
   let account_mode = || {
     if in_account_context
@@ -420,13 +413,15 @@ fn determine_completion_context(
     // For non-indented directive lines, prioritize marker-based completion first
     // (`#tag` / `^link`), then account completion, and finally directive keywords.
     // Only Transaction/Document directives are eligible for tag/link completion.
-    if has_date && supports_tag_link
+    if has_date
+      && supports_tag_link
       && let Some((prefix, range)) = marker_prefix_at_position(doc, position, '#')
     {
       return Some(CompletionMode::Tag { prefix, range });
     }
 
-    if has_date && supports_tag_link
+    if has_date
+      && supports_tag_link
       && let Some((prefix, range)) = marker_prefix_at_position(doc, position, '^')
     {
       return Some(CompletionMode::Link { prefix, range });
@@ -439,7 +434,8 @@ fn determine_completion_context(
     if has_date
       && rel >= indent + 10
       && !in_account_context
-      && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
+      && let Some((prefix, range)) =
+        token_prefix_at_position(doc, position, false, true)
       && DATE_KEYWORDS
         .iter()
         .any(|label| fuzzy_match(label, &prefix))
@@ -452,7 +448,8 @@ fn determine_completion_context(
     }
 
     if !in_account_context
-      && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
+      && let Some((prefix, range)) =
+        token_prefix_at_position(doc, position, false, true)
       && ROOT_KEYWORDS
         .iter()
         .any(|label| fuzzy_match(label, &prefix))
@@ -469,9 +466,7 @@ fn determine_completion_context(
 
   if has_date && supports_tag_link {
     for marker in ['#', '^'] {
-      if let Some((prefix, range)) =
-        marker_prefix_at_position(doc, position, marker)
-      {
+      if let Some((prefix, range)) = marker_prefix_at_position(doc, position, marker) {
         return Some(match marker {
           '#' => CompletionMode::Tag { prefix, range },
           '^' => CompletionMode::Link { prefix, range },
