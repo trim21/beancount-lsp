@@ -640,6 +640,25 @@ impl LanguageServer for Backend {
       None => completion::completion(&docs, &current_uri, &params),
     };
 
+    match &list {
+      Some(list) => {
+        if spdlog::default_logger().should_log(spdlog::Level::Debug) {
+          let labels: Vec<&str> =
+            list.items.iter().map(|item| item.label.as_str()).collect();
+          spdlog::debug!(
+            "completion result: count={}, labels={:?}",
+            list.items.len(),
+            labels
+          );
+        } else {
+          spdlog::debug!("completion result: count={}", list.items.len());
+        }
+      }
+      None => {
+        spdlog::debug!("completion result: none");
+      }
+    }
+
     Ok(list.map(CompletionResponse::List))
   }
 

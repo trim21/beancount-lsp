@@ -60,6 +60,10 @@ fn starts_with_ignore_ascii_case(candidate: &str, prefix: &str) -> bool {
   true
 }
 
+fn is_currently_typed_label(candidate: &str, prefix: &str) -> bool {
+  !prefix.is_empty() && candidate.eq_ignore_ascii_case(prefix)
+}
+
 fn completion_item_with_edit(
   label: String,
   kind: CompletionItemKind,
@@ -194,6 +198,7 @@ pub fn completion(
       tags
         .into_iter()
         .filter(|label| fuzzy_match(label, prefix))
+        .filter(|label| !is_currently_typed_label(label, prefix))
         .map(|label| {
           completion_item_with_edit(
             label.to_string(),
@@ -237,6 +242,7 @@ pub fn completion(
       links
         .into_iter()
         .filter(|label| fuzzy_match(label, prefix))
+        .filter(|label| !is_currently_typed_label(label, prefix))
         .map(|label| {
           completion_item_with_edit(
             label.to_string(),
@@ -1067,6 +1073,41 @@ mod tests {
   }
 
   #[test]
+  fn suppresses_current_tag_when_fully_typed() {
+    let lines = [
+      r#"2022-01-01 * "..." "..." #food"#,
+      r#"  Assets:Cash -10 USD"#,
+      r#"  Expenses:Food"#,
+      r#"2022-01-02 * "..." "..." #food|"#,
+      r#"  Expenses:Food"#,
+    ];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///tags-full.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let response = completion(&documents, &uri, &params);
+    assert!(
+      response.is_none(),
+      "expected currently typed tag to be filtered out"
+    );
+  }
+
+  #[test]
   fn replaces_whole_tag_when_cursor_is_in_middle() {
     let lines = [
       r#"2022-01-01 * "..." "..." #food"#,
@@ -1255,6 +1296,41 @@ mod tests {
     assert_eq!(edit.range.start, Position::new(3, expected_start));
     assert_eq!(edit.range.end, Position::new(3, expected_end));
     assert_eq!(edit.new_text, "invoice-2022");
+  }
+
+  #[test]
+  fn suppresses_current_link_when_fully_typed() {
+    let lines = [
+      r#"2022-01-01 * "..." "..." ^invoice-2022"#,
+      r#"  Assets:Cash -10 USD"#,
+      r#"  Expenses:Food"#,
+      r#"2022-01-02 * "..." "..." ^invoice-2022|"#,
+      r#"  Expenses:Food"#,
+    ];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///links-full.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let response = completion(&documents, &uri, &params);
+    assert!(
+      response.is_none(),
+      "expected currently typed link to be filtered out"
+    );
   }
 
   #[test]
