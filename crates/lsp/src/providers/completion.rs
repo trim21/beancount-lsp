@@ -33,6 +33,10 @@ enum CompletionMode {
     prefix: String,
     range: Range,
   },
+  Link {
+    prefix: String,
+    range: Range,
+  },
 }
 
 fn token_prefix_at_position(
@@ -110,9 +114,10 @@ fn token_prefix_at_position(
   ))
 }
 
-fn tag_prefix_at_position(
+fn marker_prefix_at_position(
   doc: &Document,
   position: Position,
+  marker: char,
 ) -> Option<(String, Range)> {
   let (_token_prefix, token_range) =
     token_prefix_at_position(doc, position, true, true)?;
@@ -124,7 +129,7 @@ fn tag_prefix_at_position(
   }
 
   let token_text = doc.rope.byte_slice(token_start..token_end).to_string();
-  if !token_text.starts_with('#') {
+  if !token_text.starts_with(marker) {
     return None;
   }
 
@@ -275,6 +280,32 @@ fn is_in_transaction_body_line(doc: &Document, byte_idx: usize) -> bool {
   false
 }
 
+fn is_tag_or_link_capable_directive(
+  doc: &Document,
+  byte_idx: usize,
+  line_slice: &str,
+  indent: usize,
+  position: Position,
+) -> bool {
+  let directive = doc.directive_at_offset(byte_idx).or_else(|| {
+    byte_idx
+      .checked_sub(1)
+      .and_then(|idx| doc.directive_at_offset(idx))
+  });
+
+  match directive {
+    Some(ast::Directive::Transaction(_)) | Some(ast::Directive::Document(_)) => {
+      true
+    }
+    Some(ast::Directive::Raw(_)) => {
+      has_date_prefix(line_slice, indent)
+        && (marker_prefix_at_position(doc, position, '#').is_some()
+          || marker_prefix_at_position(doc, position, '^').is_some())
+    }
+    _ => false,
+  }
+}
+
 fn is_probably_metadata_key(token: &str) -> bool {
   // Beancount transaction metadata keys are typically like `foo:` (lowercase + trailing colon).
   // We avoid treating those as account completion contexts.
@@ -344,71 +375,114 @@ fn determine_completion_context(
   let line_slice = doc.rope.byte_slice(line_start..line_end).to_string();
   let trimmed = line_slice.trim_start();
   let indent = line_slice.len().saturating_sub(trimmed.len());
+  let has_date = has_date_prefix(&line_slice, indent);
 
   let in_account_context = is_within_account_context(doc, cursor_byte);
+  let supports_tag_link = is_tag_or_link_capable_directive(
+    doc,
+    cursor_byte,
+    &line_slice,
+    indent,
+    position,
+  );
 
-  if indent == 0
-    && has_date_prefix(&line_slice, indent)
-    && !in_account_context
-    && let Some((prefix, range)) = tag_prefix_at_position(doc, position)
-  {
-    return Some(CompletionMode::Tag { prefix, range });
-  }
-
-  if in_account_context
-    && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, true)
-  {
-    // Avoid treating amount/price fields as accounts; require token to start alphabetic.
-    let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
-    let token_end = lsp_position_to_byte(&doc.rope, range.end)?;
-    let token = doc.rope.byte_slice(token_start..token_end).to_string();
-    if indent > 0 && range.start.character != u32::try_from(indent).ok()? {
-      return None;
-    }
-    if is_probably_metadata_key(token.trim()) {
-      return None;
-    }
-    if token.is_empty() {
-      return Some(CompletionMode::Account { prefix, range });
-    }
-    if token
-      .chars()
-      .next()
-      .map(|c| c.is_ascii_alphabetic())
-      .unwrap_or(false)
+  let account_mode = || {
+    if in_account_context
+      && let Some((prefix, range)) = token_prefix_at_position(doc, position, true, true)
     {
-      return Some(CompletionMode::Account { prefix, range });
+      // Avoid treating amount/price fields as accounts; require token to start alphabetic.
+      let token_start = lsp_position_to_byte(&doc.rope, range.start)?;
+      let token_end = lsp_position_to_byte(&doc.rope, range.end)?;
+      let token = doc.rope.byte_slice(token_start..token_end).to_string();
+      if indent > 0 && range.start.character != u32::try_from(indent).ok()? {
+        return None;
+      }
+      if is_probably_metadata_key(token.trim()) {
+        return None;
+      }
+      if token.is_empty() {
+        return Some(CompletionMode::Account { prefix, range });
+      }
+      if token
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_alphabetic())
+        .unwrap_or(false)
+      {
+        return Some(CompletionMode::Account { prefix, range });
+      }
+    }
+
+    None
+  };
+
+  if indent == 0 {
+    // For non-indented directive lines, prioritize marker-based completion first
+    // (`#tag` / `^link`), then account completion, and finally directive keywords.
+    // Only Transaction/Document directives are eligible for tag/link completion.
+    if has_date && supports_tag_link
+      && let Some((prefix, range)) = marker_prefix_at_position(doc, position, '#')
+    {
+      return Some(CompletionMode::Tag { prefix, range });
+    }
+
+    if has_date && supports_tag_link
+      && let Some((prefix, range)) = marker_prefix_at_position(doc, position, '^')
+    {
+      return Some(CompletionMode::Link { prefix, range });
+    }
+
+    if let Some(mode) = account_mode() {
+      return Some(mode);
+    }
+
+    if has_date
+      && rel >= indent + 10
+      && !in_account_context
+      && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
+      && DATE_KEYWORDS
+        .iter()
+        .any(|label| fuzzy_match(label, &prefix))
+    {
+      return Some(CompletionMode::Keyword {
+        prefix,
+        range,
+        variants: DATE_KEYWORDS,
+      });
+    }
+
+    if !in_account_context
+      && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
+      && ROOT_KEYWORDS
+        .iter()
+        .any(|label| fuzzy_match(label, &prefix))
+    {
+      return Some(CompletionMode::Keyword {
+        prefix,
+        range,
+        variants: ROOT_KEYWORDS,
+      });
+    }
+
+    return None;
+  }
+
+  if has_date && supports_tag_link {
+    for marker in ['#', '^'] {
+      if let Some((prefix, range)) =
+        marker_prefix_at_position(doc, position, marker)
+      {
+        return Some(match marker {
+          '#' => CompletionMode::Tag { prefix, range },
+          '^' => CompletionMode::Link { prefix, range },
+          _ => unreachable!(),
+        });
+      }
     }
   }
 
-  if indent == 0
-    && has_date_prefix(&line_slice, indent)
-    && rel >= indent + 10
-    && !in_account_context
-    && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
-    && DATE_KEYWORDS
-      .iter()
-      .any(|label| fuzzy_match(label, &prefix))
-  {
-    return Some(CompletionMode::Keyword {
-      prefix,
-      range,
-      variants: DATE_KEYWORDS,
-    });
-  }
-
-  if indent == 0
-    && !in_account_context
-    && let Some((prefix, range)) = token_prefix_at_position(doc, position, false, true)
-    && ROOT_KEYWORDS
-      .iter()
-      .any(|label| fuzzy_match(label, &prefix))
-  {
-    return Some(CompletionMode::Keyword {
-      prefix,
-      range,
-      variants: ROOT_KEYWORDS,
-    });
+  if let Some(mode) = account_mode() {
+    return Some(mode);
   }
 
   None
@@ -507,6 +581,58 @@ pub fn completion(
       }
 
       tags
+        .into_iter()
+        .filter(|label| fuzzy_match(label, &prefix))
+        .map(|label| CompletionItem {
+          label: label.clone(),
+          kind: Some(CompletionItemKind::KEYWORD),
+          text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range: replace_range,
+            new_text: label.clone(),
+          })),
+          ..CompletionItem::default()
+        })
+        .collect()
+    }
+    CompletionMode::Link {
+      prefix,
+      range: replace_range,
+    } => {
+      let mut links = HashSet::new();
+      for (_, doc) in documents_bfs(documents, root_uri) {
+        for dir in doc.ast() {
+          match dir {
+            ast::Directive::Transaction(tx) => {
+              for link in &tx.links {
+                let label = link.content.trim_start_matches('^');
+                if !label.is_empty() {
+                  links.insert(label.to_string());
+                }
+              }
+            }
+            ast::Directive::Document(document) => {
+              for link in &document.links {
+                let label = link.content.trim_start_matches('^');
+                if !label.is_empty() {
+                  links.insert(label.to_string());
+                }
+              }
+
+              if let Some(tags_links) = &document.tags_links {
+                for item in tags_links {
+                  let label = item.content.trim_start_matches('^');
+                  if item.content.starts_with('^') && !label.is_empty() {
+                    links.insert(label.to_string());
+                  }
+                }
+              }
+            }
+            _ => {}
+          }
+        }
+      }
+
+      links
         .into_iter()
         .filter(|label| fuzzy_match(label, &prefix))
         .map(|label| CompletionItem {
@@ -1152,6 +1278,54 @@ mod tests {
   }
 
   #[test]
+  fn replaces_whole_tag_when_cursor_is_in_middle() {
+    let lines = [
+      r#"2022-01-01 * "..." "..." #food"#,
+      r#"  Assets:Cash -10 USD"#,
+      r#"  Expenses:Food"#,
+      r#"2022-01-02 * "..." "..." #fo|od-old"#,
+      r#"  Expenses:Food"#,
+    ];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///tags-middle.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &uri, &params));
+
+    let tag = items
+      .iter()
+      .find(|i| i.label == "food")
+      .expect("expected tag completion with middle cursor");
+
+    let edit = match tag.text_edit.as_ref().expect("text edit") {
+      CompletionTextEdit::Edit(e) => e,
+      _ => panic!("unexpected insert replace edit"),
+    };
+
+    let hash_col = lines[3].find('#').expect("hash present");
+    let expected_start = u32::try_from(hash_col + 1).unwrap();
+    let expected_end = expected_start + u32::try_from("food-old".len()).unwrap();
+    assert_eq!(edit.range.start, Position::new(3, expected_start));
+    assert_eq!(edit.range.end, Position::new(3, expected_end));
+    assert_eq!(edit.new_text, "food");
+  }
+
+  #[test]
   fn completes_tags_from_parsed_directives() {
     let tag_uri = Url::from_str("file:///source-tags.bean").unwrap();
     let tag_content = "2024-01-01 * \"p\" \"n\" #groceries #fun\n  Assets:Cash -10 USD\n  Expenses:Food\n";
@@ -1197,6 +1371,164 @@ mod tests {
     assert_eq!(edit.range.start, Position::new(0, expected_col));
     assert_eq!(edit.range.end, Position::new(0, expected_col));
     assert_eq!(edit.new_text, "groceries");
+  }
+
+  #[test]
+  fn completes_links_after_caret_on_transaction() {
+    let lines = [
+      r#"2022-01-01 * "..." "..." ^invoice-2022"#,
+      r#"  Assets:Cash -10 USD"#,
+      r#"  Expenses:Food"#,
+      r#"2022-01-02 * "..." "..." ^|"#,
+      r#"  Expenses:Food"#,
+    ];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///links.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &uri, &params));
+
+    let link = items
+      .iter()
+      .find(|i| i.label == "invoice-2022")
+      .expect("expected link completion");
+
+    let edit = match link.text_edit.as_ref().expect("text edit") {
+      CompletionTextEdit::Edit(e) => e,
+      _ => panic!("unexpected insert replace edit"),
+    };
+
+    let caret_col = lines[3].find('^').expect("caret present");
+    let expected_col = u32::try_from(caret_col + 1).unwrap();
+    assert_eq!(edit.range.start, Position::new(3, expected_col));
+    assert_eq!(edit.range.end, Position::new(3, expected_col));
+    assert_eq!(edit.new_text, "invoice-2022");
+  }
+
+  #[test]
+  fn replaces_whole_link_when_cursor_is_in_middle() {
+    let lines = [
+      r#"2022-01-01 * "..." "..." ^invoice-2022"#,
+      r#"  Assets:Cash -10 USD"#,
+      r#"  Expenses:Food"#,
+      r#"2022-01-02 * "..." "..." ^in|voice-old"#,
+      r#"  Expenses:Food"#,
+    ];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///links-middle.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &uri, &params));
+
+    let link = items
+      .iter()
+      .find(|i| i.label == "invoice-2022")
+      .expect("expected link completion with middle cursor");
+
+    let edit = match link.text_edit.as_ref().expect("text edit") {
+      CompletionTextEdit::Edit(e) => e,
+      _ => panic!("unexpected insert replace edit"),
+    };
+
+    let caret_col = lines[3].find('^').expect("caret present");
+    let expected_start = u32::try_from(caret_col + 1).unwrap();
+    let expected_end = expected_start + u32::try_from("invoice-old".len()).unwrap();
+    assert_eq!(edit.range.start, Position::new(3, expected_start));
+    assert_eq!(edit.range.end, Position::new(3, expected_end));
+    assert_eq!(edit.new_text, "invoice-2022");
+  }
+
+  #[test]
+  fn does_not_complete_tags_or_links_on_unsupported_directive() {
+    let lines = [r#"2022-01-02 open Assets:Cash #|"#];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///unsupported-marker.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: Some("#".to_string()),
+      }),
+    };
+
+    let response = completion(&documents, &uri, &params);
+    assert!(
+      response.is_none(),
+      "expected no tag/link completion on unsupported directive"
+    );
+  }
+
+  #[test]
+  fn completes_tag_on_incomplete_date_directive_line() {
+    let lines = [
+      r#"2022-01-01 * "..." "..." #food"#,
+      r#"  Assets:Cash -10 USD"#,
+      r#"  Expenses:Food"#,
+      r#"2022-01-02 unknown-directive #|"#,
+    ];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///raw-tx-tag.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: Some("#".to_string()),
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &uri, &params));
+    assert!(
+      items.iter().any(|i| i.label == "food"),
+      "expected tag completion while current line is still being typed"
+    );
   }
 
   #[test]

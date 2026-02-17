@@ -532,6 +532,8 @@ impl LanguageServer for Backend {
           resolve_provider: Some(false),
           trigger_characters: Some(vec![
             ":".to_string(),
+            "#".to_string(),
+            "^".to_string(),
             "0".to_string(),
             "1".to_string(),
             "2".to_string(),
