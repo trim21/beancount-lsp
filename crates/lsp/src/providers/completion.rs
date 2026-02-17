@@ -116,13 +116,10 @@ pub fn completion(
       prefix,
       range: replace_range,
     } => {
-      let docs: Vec<_> = documents_bfs(documents, root_uri)
-        .into_iter()
-        .map(|(_, doc)| doc)
-        .collect();
+      let docs = documents_bfs(documents, root_uri);
 
       let mut accounts = HashSet::new();
-      for doc in &docs {
+      for (_, doc) in &docs {
         accounts.extend(doc.accounts.iter().map(String::as_str));
       }
 
@@ -142,13 +139,10 @@ pub fn completion(
       prefix,
       range: replace_range,
     } => {
-      let docs: Vec<_> = documents_bfs(documents, root_uri)
-        .into_iter()
-        .map(|(_, doc)| doc)
-        .collect();
+      let docs = documents_bfs(documents, root_uri);
 
       let mut currencies = HashSet::new();
-      for doc in &docs {
+      for (_, doc) in &docs {
         currencies.extend(doc.currencies.iter().map(String::as_str));
       }
 
@@ -184,13 +178,10 @@ pub fn completion(
       prefix,
       range: replace_range,
     } => {
-      let docs: Vec<_> = documents_bfs(documents, root_uri)
-        .into_iter()
-        .map(|(_, doc)| doc)
-        .collect();
+      let docs = documents_bfs(documents, root_uri);
 
       let mut tags = HashSet::new();
-      for doc in &docs {
+      for (_, doc) in &docs {
         for dir in &doc.directives {
           if let core::Directive::Transaction(tx) = dir {
             for tag in &tx.tags {
@@ -216,13 +207,10 @@ pub fn completion(
       prefix,
       range: replace_range,
     } => {
-      let docs: Vec<_> = documents_bfs(documents, root_uri)
-        .into_iter()
-        .map(|(_, doc)| doc)
-        .collect();
+      let docs = documents_bfs(documents, root_uri);
 
       let mut links = HashSet::new();
-      for doc in &docs {
+      for (_, doc) in &docs {
         for dir in doc.ast() {
           match dir {
             ast::Directive::Transaction(tx) => {
