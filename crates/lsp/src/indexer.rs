@@ -169,13 +169,16 @@ impl Indexer {
       let uri = match to_url(&canonical) {
         Some(uri) => uri,
         None => {
-          tracing::warn!(file = %canonical.display(), "failed to convert path to URI");
+          spdlog::warn!("failed to convert path to URI file={}", canonical.display());
           continue;
         }
       };
 
       if !canonical.is_file() {
-        tracing::warn!(file = %canonical.display(), "skipping non-file path from includes");
+        spdlog::warn!(
+          "skipping non-file path from includes file={}",
+          canonical.display()
+        );
         continue;
       }
 
@@ -187,7 +190,10 @@ impl Indexer {
       let base_dir = match canonical.parent() {
         Some(parent) => parent,
         None => {
-          tracing::warn!(file = %canonical.display(), "missing parent directory for include resolution");
+          spdlog::warn!(
+            "missing parent directory for include resolution file={}",
+            canonical.display()
+          );
           &canonical
         }
       };
@@ -202,7 +208,7 @@ impl Indexer {
 
       self.insert_document(uri, doc);
 
-      tracing::info!(file = %canonical.display(), "loaded beancount file");
+      spdlog::info!("loaded beancount file file={}", canonical.display());
     }
 
     Ok(())
@@ -301,7 +307,10 @@ impl Indexer {
           includes.insert(uri);
         }
         None => {
-          tracing::warn!(file = %canonical.display(), "failed to convert include path to URI");
+          spdlog::warn!(
+            "failed to convert include path to URI file={}",
+            canonical.display()
+          );
         }
       }
     }
@@ -363,7 +372,7 @@ impl Indexer {
       let uri = match Url::from_file_path(&canonical) {
         Some(uri) => uri,
         None => {
-          tracing::warn!(file = %canonical.display(), "failed to convert path to URI");
+          spdlog::warn!("failed to convert path to URI file={}", canonical.display());
           continue;
         }
       };
@@ -373,7 +382,10 @@ impl Indexer {
       }
 
       if !canonical.is_file() {
-        tracing::warn!(file = %canonical.display(), "skipping non-file path from includes");
+        spdlog::warn!(
+          "skipping non-file path from includes file={}",
+          canonical.display()
+        );
         continue;
       }
 
@@ -385,7 +397,10 @@ impl Indexer {
       let base_dir = match canonical.parent() {
         Some(parent) => parent,
         None => {
-          tracing::warn!(file = %canonical.display(), "missing parent directory for include resolution");
+          spdlog::warn!(
+            "missing parent directory for include resolution file={}",
+            canonical.display()
+          );
           &canonical
         }
       };
@@ -410,7 +425,11 @@ impl Indexer {
     let metadata = match fs::metadata(&canonical) {
       Ok(metadata) => metadata,
       Err(err) => {
-        tracing::warn!(file = %canonical.display(), error = %err, "failed to read file metadata");
+        spdlog::warn!(
+          "failed to read file metadata file={} error={}",
+          canonical.display(),
+          err
+        );
         return None;
       }
     };
@@ -428,7 +447,11 @@ impl Indexer {
     let content = match fs::read_to_string(&canonical) {
       Ok(content) => content,
       Err(err) => {
-        tracing::warn!(file = %canonical.display(), error = %err, "failed to read beancount file");
+        spdlog::warn!(
+          "failed to read beancount file file={} error={}",
+          canonical.display(),
+          err
+        );
         return None;
       }
     };
@@ -436,7 +459,10 @@ impl Indexer {
     let doc = match Self::parse_document(&content, &canonical) {
       Some(doc) => Arc::new(doc),
       None => {
-        tracing::warn!(file = %canonical.display(), "failed to parse beancount file");
+        spdlog::warn!(
+          "failed to parse beancount file file={}",
+          canonical.display()
+        );
         return None;
       }
     };
@@ -526,7 +552,10 @@ impl Indexer {
     let base_path = match filename.parent() {
       Some(parent) => parent,
       None => {
-        tracing::warn!(file = %filename.display(), "missing parent directory for include resolution");
+        spdlog::warn!(
+          "missing parent directory for include resolution file={}",
+          filename.display()
+        );
         filename
       }
     };
@@ -548,24 +577,24 @@ impl Indexer {
                   }
                 }
                 Err(err) => {
-                  tracing::warn!(
-                      base_file = %base_path.display(),
-                      include = %include,
-                      pattern = %pattern,
-                      error = %err,
-                      "failed to expand include glob entry"
+                  spdlog::warn!(
+                    "failed to expand include glob entry base_file={} include={} pattern={} error={}",
+                    base_path.display(),
+                    include,
+                    pattern,
+                    err
                   );
                 }
               }
             }
           }
           Err(err) => {
-            tracing::warn!(
-                base_file = %base_path.display(),
-                include = %include,
-                pattern = %pattern,
-                error = %err,
-                "failed to expand include glob"
+            spdlog::warn!(
+              "failed to expand include glob base_file={} include={} pattern={} error={}",
+              base_path.display(),
+              include,
+              pattern,
+              err
             );
           }
         }

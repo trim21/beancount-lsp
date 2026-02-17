@@ -25,7 +25,7 @@ impl Checker for PythonChecker {
         let error = error.into_bound(py);
         match error_to_diagnostic(error) {
           Ok(diagnostic) => diagnostics.push(diagnostic),
-          Err(err) => tracing::warn!("failed to convert Python error: {err}"),
+          Err(err) => spdlog::warn!("failed to convert Python error: {err}"),
         }
       }
 

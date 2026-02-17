@@ -126,7 +126,7 @@ pub fn hover(
   let (account, account_range) = account_at_position(doc.as_ref(), position)?;
   let posting_target = posting_at_position(doc.as_ref(), position);
 
-  tracing::debug!("hover requested for account: {}", account);
+  spdlog::debug!("hover requested for account: {}", account);
 
   let amount_hover = posting_target
     .as_ref()

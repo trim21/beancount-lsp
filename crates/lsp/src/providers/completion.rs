@@ -445,7 +445,7 @@ pub fn completion(
     }
   };
 
-  tracing::debug!("completion for {:?}", ctx);
+  spdlog::debug!("completion for {:?}", ctx);
 
   let mut items: Vec<CompletionItem> = match ctx {
     CompletionMode::Account {

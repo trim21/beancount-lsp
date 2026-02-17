@@ -16,9 +16,10 @@ mod text;
 
 use clap::{Parser, ValueEnum, error::ErrorKind as ClapErrorKind};
 use server::Backend;
+use spdlog::sink::FileSink;
+use spdlog::{Level, LevelFilter, Logger};
 use tower_lsp_server::jsonrpc::{Error, Result};
 use tower_lsp_server::{LspService, Server};
-use tracing::{Level, info};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum LogLevel {
@@ -30,13 +31,13 @@ enum LogLevel {
 }
 
 impl LogLevel {
-  fn to_tracing_level(self) -> Level {
+  fn to_spdlog_level_filter(self) -> LevelFilter {
     match self {
-      LogLevel::Error => Level::ERROR,
-      LogLevel::Warn => Level::WARN,
-      LogLevel::Info => Level::INFO,
-      LogLevel::Debug => Level::DEBUG,
-      LogLevel::Trace => Level::TRACE,
+      LogLevel::Error => LevelFilter::MoreSevereEqual(Level::Error),
+      LogLevel::Warn => LevelFilter::MoreSevereEqual(Level::Warn),
+      LogLevel::Info => LevelFilter::MoreSevereEqual(Level::Info),
+      LogLevel::Debug => LevelFilter::MoreSevereEqual(Level::Debug),
+      LogLevel::Trace => LevelFilter::MoreSevereEqual(Level::Trace),
     }
   }
 }
@@ -81,34 +82,34 @@ fn parse_args(argv: &[String]) -> Result<Option<Cli>> {
 }
 
 fn init_logging(cli: &Cli) -> Result<()> {
-  let level = cli.log_level.to_tracing_level();
-  let base = tracing_subscriber::fmt()
-    .with_max_level(level)
-    .with_ansi(false)
-    .with_writer(tracing_subscriber::fmt::writer::BoxMakeWriter::new(
-      std::io::stderr,
-    ));
+  let level_filter = cli.log_level.to_spdlog_level_filter();
 
   if let Some(path) = &cli.log_file {
-    let file = OpenOptions::new()
+    let _ = OpenOptions::new()
       .create(true)
       .append(true)
       .open(path)
-      .map_err(|e| {
+      .map_err(|err| {
         Error::invalid_params(format!(
-          "failed to open log file {}: {e}",
+          "failed to open log file {}: {err}",
           path.display()
         ))
       })?;
 
-    base
-      .with_writer(move || file.try_clone().expect("failed to clone log file handle"))
-      .try_init()
-      .map_err(|e| Error::invalid_params(format!("failed to init logging: {e}")))?;
+    let file_sink = FileSink::builder().path(path).build_arc().map_err(|err| {
+      Error::invalid_params(format!(
+        "failed to create file sink for {}: {err}",
+        path.display()
+      ))
+    })?;
+    let logger = Logger::builder()
+      .sink(file_sink)
+      .level_filter(level_filter)
+      .build_arc()
+      .map_err(|err| Error::invalid_params(format!("failed to init logging: {err}")))?;
+    spdlog::set_default_logger(logger);
   } else {
-    base
-      .try_init()
-      .map_err(|e| Error::invalid_params(format!("failed to init logging: {e}")))?;
+    spdlog::default_logger().set_level_filter(level_filter);
   }
 
   Ok(())
@@ -141,7 +142,11 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
     .as_ref()
     .map(|p| p.display().to_string())
     .unwrap_or_else(|| "stderr".to_owned());
-  info!(level = ?cli.log_level, destination = %log_dest, "logging initialized");
+  spdlog::info!(
+    "logging initialized level={:?} destination={}",
+    cli.log_level,
+    log_dest
+  );
 
   let stdin = tokio::io::stdin();
   let stdout = tokio::io::stdout();

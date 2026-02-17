@@ -23,7 +23,6 @@ use tower_lsp_server::ls_types::{
   TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri as Url,
 };
 use tower_lsp_server::{Client, LanguageServer};
-use tracing::info;
 
 use crate::checkers::{self, Checker, CheckerDiagnostic};
 use crate::indexer::{Indexer, canonical_or_original};
@@ -34,11 +33,11 @@ pub(crate) fn documents_bfs(
   documents: &HashMap<Url, Arc<Document>>,
   root: &Url,
 ) -> Vec<(Url, Arc<Document>)> {
-  tracing::debug!(
+  spdlog::debug!(
     "keys: {:?}",
     documents.keys().map(|f| f.to_string()).collect::<Vec<_>>()
   );
-  tracing::debug!("root: {:?}", root.to_string());
+  spdlog::debug!("root: {:?}", root.to_string());
 
   let mut ordered = Vec::new();
   let mut queue: VecDeque<Url> = VecDeque::new();
@@ -69,7 +68,10 @@ pub(crate) fn documents_bfs(
       if let Some(child_uri) = Url::from_file_path(&canonical) {
         queue.push_back(child_uri);
       } else {
-        tracing::warn!(file = %canonical.display(), "failed to convert include path to URI");
+        spdlog::warn!(
+          "failed to convert include path to URI file={} ",
+          canonical.display()
+        );
       }
     }
   }
@@ -208,7 +210,7 @@ pub fn parse_initialize_config(params: &InitializeParams) -> Result<InitializeCo
     .as_ref()
     .ok_or_else(|| Error::invalid_params("missing initializationOptions"))?;
 
-  tracing::debug!("init opts: {}", value.clone());
+  spdlog::debug!("init opts: {}", value.clone());
 
   serde_json::from_value(value.clone()).map_err(|err| {
     Error::invalid_params(format!("invalid initializationOptions: {err}"))
@@ -340,7 +342,7 @@ impl Backend {
     if let Some(checker) = self.checker.as_ref().map(Arc::clone) {
       let result = task::spawn_blocking(move || {
         let name = checker.name();
-        tracing::info!("run checker: {}", name);
+        spdlog::info!("run checker: {}", name);
 
         match checker.run(&root_file_str) {
           Ok(diags) => {
@@ -355,7 +357,7 @@ impl Backend {
             (mapped, Vec::new())
           }
           Err(err) => {
-            tracing::warn!("failed to run checker: {}", err);
+            spdlog::warn!("failed to run checker: {}", err);
             (Vec::new(), vec![(name, err)])
           }
         }
@@ -456,9 +458,12 @@ impl LanguageServer for Backend {
     let config = parse_initialize_config(&params)?;
 
     if let Some(root_file) = &config.root_file {
-      info!(root_file = %root_file.display(), "received initialization config");
+      spdlog::info!(
+        "received initialization config root_file={}",
+        root_file.display()
+      );
     } else {
-      info!("received initialization config without root_file");
+      spdlog::info!("received initialization config without root_file");
     }
 
     let root_path = config
@@ -474,7 +479,7 @@ impl LanguageServer for Backend {
 
       let indexer = match root_path.as_ref() {
         Some(path) => Indexer::from_journal(path).unwrap_or_else(|e| {
-          tracing::warn!("failed to load journal tree: {e}");
+          spdlog::warn!("failed to load journal tree: {e}");
           Indexer::new()
         }),
         None => Indexer::new(),
@@ -600,7 +605,7 @@ impl LanguageServer for Backend {
     &self,
     params: CompletionParams,
   ) -> Result<Option<CompletionResponse>> {
-    tracing::debug!("completion triggered");
+    spdlog::debug!("completion triggered");
     let current_uri =
       normalize_uri(&params.text_document_position.text_document.uri.clone());
 
@@ -680,12 +685,12 @@ impl LanguageServer for Backend {
   ) -> Result<Option<SemanticTokensResult>> {
     let uri = normalize_uri(&params.text_document.uri);
 
-    tracing::debug!(uri = ?uri, "semantic tokens requested");
+    spdlog::debug!("semantic tokens requested uri={:?}", uri);
 
     // Prefer the latest in-memory text from didOpen/didChange/didSave to avoid stale
     // highlighting when the indexer snapshot lags behind fast edits.
     if let Some(text) = self.documents_text.read().await.get(&uri).cloned() {
-      tracing::debug!(uri = ?uri, source = "memory", "semantic tokens resolved");
+      spdlog::debug!("semantic tokens resolved uri={:?} source=memory", uri);
       return Ok(semantic_tokens::semantic_tokens_full_from_text(
         text.as_str(),
       ));
@@ -694,11 +699,11 @@ impl LanguageServer for Backend {
     // Prefer the latest on-disk content (async) so semantic tokens stay in sync even when the
     // snapshot/indexer is slightly behind or the file changed externally.
     if let Some(doc) = reparse_document_from_disk_async(uri.clone()).await {
-      tracing::debug!(uri = ?uri, source = "disk", "semantic tokens resolved");
+      spdlog::debug!("semantic tokens resolved uri={:?} source=disk", uri);
       return Ok(semantic_tokens::semantic_tokens_full(doc.as_ref()));
     }
 
-    tracing::debug!(uri = ?uri, source = "snapshot", "semantic tokens resolved");
+    spdlog::debug!("semantic tokens resolved uri={:?} source=snapshot", uri);
 
     let doc = self
       .with_inner(|inner| {
@@ -717,9 +722,9 @@ fn log_collected_accounts(docs: &HashMap<Url, Arc<Document>>) {
     accounts.extend(doc.accounts.iter().cloned());
   }
 
-  tracing::info!(count = accounts.len(), "collected accounts at init");
+  spdlog::info!("collected accounts at init count={}", accounts.len());
   // Keep the full list at debug level to avoid noisy info logs.
-  tracing::info!(accounts = ?accounts);
+  spdlog::debug!("accounts={:?}", accounts);
 }
 
 #[cfg(test)]
