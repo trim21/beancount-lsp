@@ -16,7 +16,7 @@ mod text;
 
 use clap::{Parser, ValueEnum, error::ErrorKind as ClapErrorKind};
 use server::Backend;
-use spdlog::sink::FileSink;
+use spdlog::sink::{FileSink, StdStreamSink};
 use spdlog::{Level, LevelFilter, Logger};
 use tower_lsp_server::jsonrpc::{Error, Result};
 use tower_lsp_server::{LspService, Server};
@@ -109,7 +109,16 @@ fn init_logging(cli: &Cli) -> Result<()> {
       .map_err(|err| Error::invalid_params(format!("failed to init logging: {err}")))?;
     spdlog::set_default_logger(logger);
   } else {
-    spdlog::default_logger().set_level_filter(level_filter);
+    let stderr_sink = StdStreamSink::builder()
+      .stderr()
+      .build_arc()
+      .map_err(|err| Error::invalid_params(format!("failed to init logging: {err}")))?;
+    let logger = Logger::builder()
+      .sink(stderr_sink)
+      .level_filter(level_filter)
+      .build_arc()
+      .map_err(|err| Error::invalid_params(format!("failed to init logging: {err}")))?;
+    spdlog::set_default_logger(logger);
   }
 
   Ok(())
