@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use beancount_core as core;
 use beancount_parser::ast;
 use tower_lsp_server::ls_types::{
   CompletionItem, CompletionItemKind, CompletionList, CompletionParams,
@@ -12,6 +11,7 @@ use crate::providers::completion_context::{
   CompletionMode, determine_completion_context as determine_completion_context_inner,
 };
 use crate::server::{Document, documents_bfs, find_document};
+use crate::text::lsp_position_to_byte;
 
 const DATE_KEYWORDS: &[&str] =
   &["custom", "balance", "open", "close", "note", "price", "pad"];
@@ -60,21 +60,89 @@ fn starts_with_ignore_ascii_case(candidate: &str, prefix: &str) -> bool {
   true
 }
 
-fn is_currently_typed_label(candidate: &str, prefix: &str) -> bool {
-  !prefix.is_empty() && candidate.eq_ignore_ascii_case(prefix)
+fn current_marker_label_span(
+  doc: &Document,
+  range: tower_lsp_server::ls_types::Range,
+) -> Option<(usize, usize)> {
+  let start = lsp_position_to_byte(&doc.rope, range.start)?;
+  let end = lsp_position_to_byte(&doc.rope, range.end)?;
+  (start <= end).then_some((start, end))
+}
+
+fn marker_label_span(
+  content: &str,
+  span: ast::Span,
+  marker: char,
+) -> Option<(usize, usize)> {
+  let token = content.get(span.start..span.end)?;
+  let marker_len = marker.len_utf8();
+  let start = if token.starts_with(marker) {
+    span.start.checked_add(marker_len)?
+  } else {
+    span.start
+  };
+
+  (start <= span.end).then_some((start, span.end))
+}
+
+fn should_skip_current_marker(
+  is_current_doc: bool,
+  current_span: Option<(usize, usize)>,
+  content: &str,
+  token_span: ast::Span,
+  marker: char,
+) -> bool {
+  if !is_current_doc {
+    return false;
+  }
+
+  let Some(current_span) = current_span else {
+    return false;
+  };
+
+  marker_label_span(content, token_span, marker) == Some(current_span)
 }
 
 fn completion_item_with_edit(
   label: String,
   kind: CompletionItemKind,
   range: tower_lsp_server::ls_types::Range,
+  append_whitespace: bool,
 ) -> CompletionItem {
-  let new_text = label.clone();
+  let mut new_text = label.clone();
+  if append_whitespace {
+    new_text.push(' ');
+  }
+
   CompletionItem {
     label,
     kind: Some(kind),
     text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
     ..CompletionItem::default()
+  }
+}
+
+fn should_append_keyword_whitespace(
+  doc: &Document,
+  position: Position,
+  replace_range: tower_lsp_server::ls_types::Range,
+) -> bool {
+  if position != replace_range.end {
+    return false;
+  }
+
+  let Some(cursor_byte) = lsp_position_to_byte(&doc.rope, position) else {
+    return false;
+  };
+
+  let Some(after_cursor) = doc.content().get(cursor_byte..) else {
+    return false;
+  };
+
+  match after_cursor.chars().next() {
+    None => true,
+    Some('\n' | '\r') => true,
+    _ => false,
   }
 }
 
@@ -135,6 +203,7 @@ pub fn completion(
             label.to_string(),
             CompletionItemKind::VALUE,
             replace_range,
+            false,
           )
         })
         .collect()
@@ -158,6 +227,7 @@ pub fn completion(
             label.to_string(),
             CompletionItemKind::VALUE,
             replace_range,
+            false,
           )
         })
         .collect()
@@ -166,30 +236,49 @@ pub fn completion(
       prefix,
       range: replace_range,
       variants,
-    } => variants
-      .iter()
-      .copied()
-      .filter(|label| fuzzy_match(label, prefix))
-      .map(|label| {
-        completion_item_with_edit(
-          label.to_string(),
-          CompletionItemKind::KEYWORD,
-          replace_range,
-        )
-      })
-      .collect(),
+    } => {
+      let append_whitespace =
+        should_append_keyword_whitespace(doc.as_ref(), position, replace_range);
+
+      variants
+        .iter()
+        .copied()
+        .filter(|label| fuzzy_match(label, prefix))
+        .map(|label| {
+          completion_item_with_edit(
+            label.to_string(),
+            CompletionItemKind::KEYWORD,
+            replace_range,
+            append_whitespace,
+          )
+        })
+        .collect()
+    }
     CompletionMode::Tag {
       prefix,
       range: replace_range,
     } => {
       let docs = documents_bfs(documents, root_uri);
+      let current_span = current_marker_label_span(doc.as_ref(), replace_range);
 
       let mut tags = HashSet::new();
-      for (_, doc) in &docs {
-        for dir in &doc.directives {
-          if let core::Directive::Transaction(tx) = dir {
+      for (_, candidate_doc) in &docs {
+        let is_current_doc = Arc::ptr_eq(candidate_doc, &doc);
+        for dir in candidate_doc.ast() {
+          if let ast::Directive::Transaction(tx) = dir {
             for tag in &tx.tags {
-              insert_label(&mut tags, tag.as_str());
+              if should_skip_current_marker(
+                is_current_doc,
+                current_span,
+                candidate_doc.content(),
+                tag.span,
+                '#',
+              ) {
+                continue;
+              }
+
+              let label = tag.content.trim_start_matches('#');
+              insert_label(&mut tags, label);
             }
           }
         }
@@ -198,12 +287,12 @@ pub fn completion(
       tags
         .into_iter()
         .filter(|label| fuzzy_match(label, prefix))
-        .filter(|label| !is_currently_typed_label(label, prefix))
         .map(|label| {
           completion_item_with_edit(
             label.to_string(),
             CompletionItemKind::KEYWORD,
             replace_range,
+            false,
           )
         })
         .collect()
@@ -213,23 +302,55 @@ pub fn completion(
       range: replace_range,
     } => {
       let docs = documents_bfs(documents, root_uri);
+      let current_span = current_marker_label_span(doc.as_ref(), replace_range);
 
       let mut links = HashSet::new();
-      for (_, doc) in &docs {
-        for dir in doc.ast() {
+      for (_, candidate_doc) in &docs {
+        let is_current_doc = Arc::ptr_eq(candidate_doc, &doc);
+        for dir in candidate_doc.ast() {
           match dir {
             ast::Directive::Transaction(tx) => {
               for link in &tx.links {
+                if should_skip_current_marker(
+                  is_current_doc,
+                  current_span,
+                  candidate_doc.content(),
+                  link.span,
+                  '^',
+                ) {
+                  continue;
+                }
+
                 insert_link_label(&mut links, link.content, false);
               }
             }
             ast::Directive::Document(document) => {
               for link in &document.links {
+                if should_skip_current_marker(
+                  is_current_doc,
+                  current_span,
+                  candidate_doc.content(),
+                  link.span,
+                  '^',
+                ) {
+                  continue;
+                }
+
                 insert_link_label(&mut links, link.content, false);
               }
 
               if let Some(tags_links) = &document.tags_links {
                 for item in tags_links {
+                  if should_skip_current_marker(
+                    is_current_doc,
+                    current_span,
+                    candidate_doc.content(),
+                    item.span,
+                    '^',
+                  ) {
+                    continue;
+                  }
+
                   insert_link_label(&mut links, item.content, true);
                 }
               }
@@ -242,12 +363,12 @@ pub fn completion(
       links
         .into_iter()
         .filter(|label| fuzzy_match(label, prefix))
-        .filter(|label| !is_currently_typed_label(label, prefix))
         .map(|label| {
           completion_item_with_edit(
             label.to_string(),
             CompletionItemKind::KEYWORD,
             replace_range,
+            false,
           )
         })
         .collect()
@@ -1073,7 +1194,7 @@ mod tests {
   }
 
   #[test]
-  fn suppresses_current_tag_when_fully_typed() {
+  fn keeps_same_tag_from_other_directives_when_current_tag_is_fully_typed() {
     let lines = [
       r#"2022-01-01 * "..." "..." #food"#,
       r#"  Assets:Cash -10 USD"#,
@@ -1100,10 +1221,10 @@ mod tests {
       }),
     };
 
-    let response = completion(&documents, &uri, &params);
+    let items = completion_items(completion(&documents, &uri, &params));
     assert!(
-      response.is_none(),
-      "expected currently typed tag to be filtered out"
+      items.iter().any(|i| i.label == "food"),
+      "expected same tag from other directives to remain in suggestions"
     );
   }
 
@@ -1299,7 +1420,7 @@ mod tests {
   }
 
   #[test]
-  fn suppresses_current_link_when_fully_typed() {
+  fn keeps_same_link_from_other_directives_when_current_link_is_fully_typed() {
     let lines = [
       r#"2022-01-01 * "..." "..." ^invoice-2022"#,
       r#"  Assets:Cash -10 USD"#,
@@ -1326,10 +1447,10 @@ mod tests {
       }),
     };
 
-    let response = completion(&documents, &uri, &params);
+    let items = completion_items(completion(&documents, &uri, &params));
     assert!(
-      response.is_none(),
-      "expected currently typed link to be filtered out"
+      items.iter().any(|i| i.label == "invoice-2022"),
+      "expected same link from other directives to remain in suggestions"
     );
   }
 
@@ -1437,6 +1558,7 @@ mod tests {
 
     assert_eq!(edit.range.start, Position::new(0, 11));
     assert_eq!(edit.range.end, Position::new(0, 11));
+    assert_eq!(edit.new_text, "custom ");
   }
 
   #[test]
@@ -1480,6 +1602,39 @@ mod tests {
 
     assert_eq!(edit.range.start, Position::new(0, 0));
     assert_eq!(edit.range.end, Position::new(0, 0));
+    assert_eq!(edit.new_text, "include ");
+  }
+
+  #[test]
+  fn does_not_append_whitespace_when_position_is_not_range_end() {
+    let lines = [r#"2026-02-02 custom|"#];
+    let (doc, position) = doc_with_cursor(&lines);
+
+    let range = tower_lsp_server::ls_types::Range {
+      start: Position::new(position.line, position.character.saturating_sub(1)),
+      end: Position::new(position.line, position.character.saturating_add(1)),
+    };
+
+    assert!(
+      !should_append_keyword_whitespace(doc.as_ref(), position, range),
+      "expected no trailing whitespace when cursor is not at replacement end"
+    );
+  }
+
+  #[test]
+  fn does_not_append_whitespace_when_non_newline_follows_cursor() {
+    let lines = [r#"2026-02-02 |x"#];
+    let (doc, position) = doc_with_cursor(&lines);
+
+    let range = tower_lsp_server::ls_types::Range {
+      start: position,
+      end: position,
+    };
+
+    assert!(
+      !should_append_keyword_whitespace(doc.as_ref(), position, range),
+      "expected no trailing whitespace when non-newline follows cursor"
+    );
   }
 
   #[cfg(windows)]

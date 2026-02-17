@@ -1,3 +1,5 @@
+#![allow(clippy::match_like_matches_macro)]
+
 use std::env;
 
 use tower_lsp_server::jsonrpc::Result;

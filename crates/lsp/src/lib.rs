@@ -1,3 +1,5 @@
+#![allow(clippy::match_like_matches_macro)]
+
 use std::fs::OpenOptions;
 use std::iter;
 use std::path::PathBuf;
