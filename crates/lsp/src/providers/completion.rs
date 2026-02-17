@@ -171,7 +171,7 @@ pub fn completion(
     } => variants
       .iter()
       .copied()
-      .filter(|label| fuzzy_match(label, &prefix))
+      .filter(|label| fuzzy_match(label, prefix))
       .map(|label| {
         completion_item_with_edit(
           label.to_string(),
@@ -227,17 +227,17 @@ pub fn completion(
           match dir {
             ast::Directive::Transaction(tx) => {
               for link in &tx.links {
-                insert_link_label(&mut links, &link.content, false);
+                insert_link_label(&mut links, link.content, false);
               }
             }
             ast::Directive::Document(document) => {
               for link in &document.links {
-                insert_link_label(&mut links, &link.content, false);
+                insert_link_label(&mut links, link.content, false);
               }
 
               if let Some(tags_links) = &document.tags_links {
                 for item in tags_links {
-                  insert_link_label(&mut links, &item.content, true);
+                  insert_link_label(&mut links, item.content, true);
                 }
               }
             }

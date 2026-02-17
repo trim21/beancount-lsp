@@ -1,5 +1,5 @@
-use chumsky::prelude::*;
 use beancount_parser::ast;
+use chumsky::prelude::*;
 use tower_lsp_server::ls_types::{Position, Range};
 
 use crate::providers::account::account_at_position;
@@ -70,7 +70,7 @@ struct ParsedToken {
   end: usize,
 }
 
-fn span_slice<'a>(text: &'a str, start: usize, end: usize) -> Option<&'a str> {
+fn span_slice(text: &str, start: usize, end: usize) -> Option<&str> {
   if start > end || end > text.len() {
     return None;
   }
@@ -164,10 +164,7 @@ impl<'a> CompletionLineContext<'a> {
     Some(MarkerToken {
       kind,
       prefix,
-      range: Range {
-        start,
-        end,
-      },
+      range: Range { start, end },
     })
   }
 
@@ -178,10 +175,7 @@ impl<'a> CompletionLineContext<'a> {
       .position(|token| token.start == token_start)
   }
 
-  fn previous_token_before_text(
-    &self,
-    token_start: usize,
-  ) -> Option<&'a str> {
+  fn previous_token_before_text(&self, token_start: usize) -> Option<&'a str> {
     let token = self
       .parsed_tokens
       .iter()
@@ -389,17 +383,14 @@ pub(crate) fn is_probably_currency_context<'a>(
         return Some((token.prefix, token.range));
       }
 
-      if keyword.eq_ignore_ascii_case("price")
-        && (token_idx == 2 || token_idx >= 4)
-      {
+      if keyword.eq_ignore_ascii_case("price") && (token_idx == 2 || token_idx >= 4) {
         return Some((token.prefix, token.range));
       }
     }
   }
 
-  if let Some(previous_token) =
-    line_ctx.previous_token_before_text(token_start_rel)
-    && is_number_like_token(&previous_token)
+  if let Some(previous_token) = line_ctx.previous_token_before_text(token_start_rel)
+    && is_number_like_token(previous_token)
   {
     return Some((token.prefix, token.range));
   }
@@ -530,7 +521,8 @@ fn is_within_account_context_tolerant(
   position: Position,
   byte_idx: usize,
 ) -> bool {
-  account_at_position(doc, position).is_some() || is_in_transaction_body_line(doc, byte_idx)
+  account_at_position(doc, position).is_some()
+    || is_in_transaction_body_line(doc, byte_idx)
 }
 
 fn marker_completion_mode<'a>(marker: &MarkerToken<'a>) -> CompletionMode<'a> {
@@ -609,7 +601,7 @@ fn date_keyword_completion_mode<'a>(
   let token = line_ctx.token_at_cursor(doc, false, true)?;
   if !date_keywords
     .iter()
-    .any(|label| fuzzy_match(label, &token.prefix))
+    .any(|label| fuzzy_match(label, token.prefix))
   {
     return None;
   }
@@ -634,7 +626,7 @@ fn root_keyword_completion_mode<'a>(
   let token = line_ctx.token_at_cursor(doc, false, true)?;
   if !root_keywords
     .iter()
-    .any(|label| fuzzy_match(label, &token.prefix))
+    .any(|label| fuzzy_match(label, token.prefix))
   {
     return None;
   }
@@ -654,14 +646,17 @@ fn determine_from_parsed_directive<'a>(
   date_keywords: &'static [&'static str],
   root_keywords: &'static [&'static str],
 ) -> Option<CompletionMode<'a>> {
-  let in_account_context = is_within_account_context_parsed_directive(
+  let in_account_context =
+    is_within_account_context_parsed_directive(directive, line_ctx.cursor_byte);
+  let supports_tag_link = matches!(
     directive,
-    line_ctx.cursor_byte,
+    ast::Directive::Transaction(_) | ast::Directive::Document(_)
   );
-  let supports_tag_link =
-    matches!(directive, ast::Directive::Transaction(_) | ast::Directive::Document(_));
 
-  if line_ctx.has_date_prefix && supports_tag_link && let Some(marker) = marker_ctx {
+  if line_ctx.has_date_prefix
+    && supports_tag_link
+    && let Some(marker) = marker_ctx
+  {
     return Some(marker_completion_mode(marker));
   }
 
@@ -699,7 +694,10 @@ fn determine_from_tolerant_context<'a>(
   let in_account_context =
     is_within_account_context_tolerant(doc, position, line_ctx.cursor_byte);
 
-  if line_ctx.has_date_prefix && marker_ctx.is_some() && let Some(marker) = marker_ctx {
+  if line_ctx.has_date_prefix
+    && marker_ctx.is_some()
+    && let Some(marker) = marker_ctx
+  {
     return Some(marker_completion_mode(marker));
   }
 
@@ -747,9 +745,8 @@ pub(crate) fn determine_completion_context<'a>(
   let marker_ctx = marker_ctx.as_ref();
 
   let directive = directive_at_cursor(doc, line_ctx.cursor_byte);
-  let is_outside_directive = directive.is_none()
-    && line_ctx.indent == 0
-    && line_ctx.is_blank;
+  let is_outside_directive =
+    directive.is_none() && line_ctx.indent == 0 && line_ctx.is_blank;
 
   if let Some(directive) = directive {
     if matches!(directive, ast::Directive::Raw(_)) {
@@ -899,7 +896,10 @@ mod tests {
     let (doc, pos) = doc_with_cursor(&lines);
 
     let ctx = determine_completion_context(&doc, pos, DATE_KEYWORDS, ROOT_KEYWORDS);
-    assert!(ctx.is_none(), "expected no account context at document root");
+    assert!(
+      ctx.is_none(),
+      "expected no account context at document root"
+    );
   }
 
   #[test]
@@ -917,7 +917,8 @@ mod tests {
   fn parsed_dispatch_branch() {
     let lines = [r#"2025-10-10 open Assets:Cash|"#];
     let (doc, position) = doc_with_cursor(&lines);
-    let hint = determine_completion_context(&doc, position, DATE_KEYWORDS, ROOT_KEYWORDS);
+    let hint =
+      determine_completion_context(&doc, position, DATE_KEYWORDS, ROOT_KEYWORDS);
 
     assert!(
       matches!(hint, Some(CompletionMode::Account { .. })),
@@ -930,7 +931,8 @@ mod tests {
     let lines = [r#"2022-01-02 unknown-directive #|"#];
     let (doc, position) = doc_with_cursor(&lines);
 
-    let hint = determine_completion_context(&doc, position, DATE_KEYWORDS, ROOT_KEYWORDS);
+    let hint =
+      determine_completion_context(&doc, position, DATE_KEYWORDS, ROOT_KEYWORDS);
     assert!(
       matches!(hint, Some(CompletionMode::Tag { .. })),
       "expected marker completion from tolerant branch"
@@ -941,7 +943,8 @@ mod tests {
   fn outside_dispatch_branch() {
     let lines = [r#"2022-01-01 open Assets:Cash"#, r#""#, r#"|"#];
     let (doc, position) = doc_with_cursor(&lines);
-    let hint = determine_completion_context(&doc, position, DATE_KEYWORDS, ROOT_KEYWORDS);
+    let hint =
+      determine_completion_context(&doc, position, DATE_KEYWORDS, ROOT_KEYWORDS);
 
     assert!(
       matches!(
