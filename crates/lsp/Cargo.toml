@@ -16,7 +16,7 @@ chumsky = { workspace = true }
 clap = { version = "4.5.59", features = ["derive"] }
 glob = "0.3.3"
 lru = "0.16.3"
-pyo3 = { version = "0.28.1", features = ["auto-initialize", "abi3-py310", "generate-import-lib"], optional = true }
+pyo3 = { version = "0.28.2", features = ["auto-initialize", "abi3-py310", "generate-import-lib"], optional = true }
 ropey = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
