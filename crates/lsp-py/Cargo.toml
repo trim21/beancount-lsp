@@ -8,5 +8,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 beancount-lsp = { path = "../lsp", features = ["pyo3"] }
-pyo3 = { version = "0.28.1", features = ["abi3-py310", "generate-import-lib"] }
+pyo3 = { version = "0.28.2", features = ["abi3-py310", "generate-import-lib"] }
 tokio = { workspace = true }
