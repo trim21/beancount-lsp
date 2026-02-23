@@ -1749,9 +1749,8 @@ mod tests {
     let items = completion_items(completion(&documents, &uri, &params));
 
     let labels: HashSet<&str> = items.iter().map(|i| i.label.as_str()).collect();
-    for expected in ["open"] {
-      assert!(labels.contains(expected), "missing keyword {expected}");
-    }
+    let expected = "open";
+    assert!(labels.contains(expected), "missing keyword {expected}");
   }
 
   #[test]
