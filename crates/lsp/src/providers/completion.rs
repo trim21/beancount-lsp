@@ -1725,6 +1725,35 @@ mod tests {
   }
 
   #[test]
+  fn completes_keywords_after_date_with_prefix() {
+    let lines = [r#"2026-02-02 op|"#];
+    let (doc, position) = doc_with_cursor(&lines);
+    let uri = Url::from_str("file:///kw.bean").unwrap();
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &uri, &params));
+
+    let labels: HashSet<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    let expected = "open";
+    assert!(labels.contains(expected), "missing keyword {expected}");
+  }
+
+  #[test]
   fn completes_root_keywords() {
     let lines = ["|"];
     let (doc, position) = doc_with_cursor(&lines);

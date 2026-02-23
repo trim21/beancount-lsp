@@ -366,6 +366,8 @@ pub(crate) fn is_probably_currency_context<'a>(
     return None;
   }
 
+  let token_idx = line_ctx.token_index_at_start(token_start_rel);
+
   if is_probably_metadata_key(token.token.trim()) {
     return None;
   }
@@ -375,7 +377,7 @@ pub(crate) fn is_probably_currency_context<'a>(
   }
 
   if line_ctx.indent == 0 && line_ctx.has_date_prefix {
-    let token_idx = line_ctx.token_index_at_start(token_start_rel)?;
+    let token_idx = token_idx?;
     let keyword = line_ctx.line_slice.split_whitespace().nth(1);
 
     if let Some(keyword) = keyword {
@@ -392,6 +394,9 @@ pub(crate) fn is_probably_currency_context<'a>(
   if let Some(previous_token) = line_ctx.previous_token_before_text(token_start_rel)
     && is_number_like_token(previous_token)
   {
+    if line_ctx.indent == 0 && line_ctx.has_date_prefix && token_idx == Some(1) {
+      return None;
+    }
     return Some((token.prefix, token.range));
   }
 
