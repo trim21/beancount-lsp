@@ -1,4 +1,4 @@
-name: vscode ci
+name: release vscode
 
 on:
   workflow_dispatch:
