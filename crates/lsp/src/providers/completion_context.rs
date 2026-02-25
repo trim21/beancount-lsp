@@ -568,7 +568,8 @@ fn is_probably_date_directive_account_context<'a>(
   }
 
   let token_start_rel = token.start_byte.saturating_sub(line_ctx.line_start);
-  let slot_idx = if let Some(token_idx) = line_ctx.token_index_at_start(token_start_rel) {
+  let slot_idx = if let Some(token_idx) = line_ctx.token_index_at_start(token_start_rel)
+  {
     token_idx
   } else if token.token.is_empty() {
     line_ctx
