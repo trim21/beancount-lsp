@@ -543,16 +543,64 @@ fn marker_completion_mode<'a>(marker: &MarkerToken<'a>) -> CompletionMode<'a> {
   }
 }
 
+fn is_date_directive_account_slot(keyword: &str, slot_idx: usize) -> bool {
+  if keyword.eq_ignore_ascii_case("open")
+    || keyword.eq_ignore_ascii_case("close")
+    || keyword.eq_ignore_ascii_case("balance")
+    || keyword.eq_ignore_ascii_case("note")
+  {
+    return slot_idx == 2;
+  }
+
+  if keyword.eq_ignore_ascii_case("pad") {
+    return slot_idx == 2 || slot_idx == 3;
+  }
+
+  false
+}
+
+fn is_probably_date_directive_account_context<'a>(
+  line_ctx: &CompletionLineContext<'a>,
+  token: &CursorToken<'a>,
+) -> bool {
+  if line_ctx.indent != 0 || !line_ctx.has_date_prefix {
+    return false;
+  }
+
+  let token_start_rel = token.start_byte.saturating_sub(line_ctx.line_start);
+  let slot_idx = if let Some(token_idx) = line_ctx.token_index_at_start(token_start_rel)
+  {
+    token_idx
+  } else if token.token.is_empty() {
+    line_ctx
+      .parsed_tokens
+      .iter()
+      .rposition(|parsed| parsed.end <= token_start_rel)
+      .map(|idx| idx + 1)
+      .unwrap_or(0)
+  } else {
+    return false;
+  };
+
+  let Some(keyword) = line_ctx.line_slice.split_whitespace().nth(1) else {
+    return false;
+  };
+
+  is_date_directive_account_slot(keyword, slot_idx)
+}
+
 fn account_completion_mode<'a>(
   doc: &Document,
   line_ctx: &CompletionLineContext<'a>,
   in_account_context: bool,
 ) -> Option<CompletionMode<'a>> {
+  let token = line_ctx.token_at_cursor(doc, true, true)?;
+  let in_account_context =
+    in_account_context || is_probably_date_directive_account_context(line_ctx, &token);
   if !in_account_context {
     return None;
   }
 
-  let token = line_ctx.token_at_cursor(doc, true, true)?;
   if line_ctx.indent > 0
     && token.range.start.character != u32::try_from(line_ctx.indent).ok()?
   {
@@ -876,6 +924,20 @@ mod tests {
     let lines = [r#"2025-10-10 balance Assets:Bank:CCB:C6485|"#];
 
     assert_account_range(&lines, Position::new(0, 19), Position::new(0, 40));
+  }
+
+  #[test]
+  fn tolerant_context_allows_balance_account_after_keyword_space() {
+    let lines = [r#"2026-02-26 balance |"#];
+
+    assert_account_range(&lines, Position::new(0, 19), Position::new(0, 19));
+  }
+
+  #[test]
+  fn tolerant_context_allows_balance_account_with_prefix() {
+    let lines = [r#"2026-02-26 balance l|"#];
+
+    assert_account_range(&lines, Position::new(0, 19), Position::new(0, 20));
   }
 
   #[test]

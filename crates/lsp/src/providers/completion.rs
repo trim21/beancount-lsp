@@ -655,6 +655,59 @@ mod tests {
   }
 
   #[test]
+  fn completes_balance_account_with_incomplete_prefix() {
+    let open_uri = Url::from_str("file:///open.bean").unwrap();
+    let open_content = "2020-01-01 open Liabilities:CreditCard\n";
+    let open_doc = build_doc(&open_uri, open_content);
+
+    let bal_uri = Url::from_str("file:///bal.bean").unwrap();
+    let bal_with_cursor = "2026-02-26 balance l|\n";
+    let cursor_col = bal_with_cursor.find('|').expect("cursor marker present");
+    let bal_content = {
+      let mut s = bal_with_cursor.to_string();
+      s.remove(cursor_col);
+      s
+    };
+    let bal_doc = build_doc(&bal_uri, &bal_content);
+
+    let mut documents = HashMap::new();
+    documents.insert(open_uri.clone(), open_doc);
+    documents.insert(bal_uri.clone(), bal_doc);
+
+    let position = Position::new(0, u32::try_from(cursor_col).unwrap());
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier {
+          uri: bal_uri.clone(),
+        },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::TRIGGER_CHARACTER,
+        trigger_character: Some("l".to_string()),
+      }),
+    };
+
+    let items = completion_items(completion(&documents, &open_uri, &params));
+
+    let item = items
+      .iter()
+      .find(|i| i.label == "Liabilities:CreditCard")
+      .expect("expected account item");
+
+    let edit = match item.text_edit.as_ref().expect("text edit") {
+      CompletionTextEdit::Edit(e) => e,
+      _ => panic!("unexpected insert replace edit"),
+    };
+
+    assert_eq!(edit.range.start, Position::new(0, 19));
+    assert_eq!(edit.range.end, Position::new(0, 20));
+    assert_eq!(edit.new_text, "Liabilities:CreditCard");
+  }
+
+  #[test]
   fn completes_when_cursor_at_account_end() {
     let uri = Url::from_str("file:///main.bean").unwrap();
     let content = "2023-01-01 open Assets:Cash\n";

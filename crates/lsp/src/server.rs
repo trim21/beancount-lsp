@@ -530,21 +530,18 @@ impl LanguageServer for Backend {
         text_document_sync: Some(text_document_sync),
         completion_provider: Some(CompletionOptions {
           resolve_provider: Some(false),
-          trigger_characters: Some(vec![
-            ":".to_string(),
-            "#".to_string(),
-            "^".to_string(),
-            "0".to_string(),
-            "1".to_string(),
-            "2".to_string(),
-            "3".to_string(),
-            "4".to_string(),
-            "5".to_string(),
-            "6".to_string(),
-            "7".to_string(),
-            "8".to_string(),
-            "9".to_string(),
-          ]),
+          trigger_characters: Some({
+            let mut chars = vec![
+              ":".to_string(),
+              "#".to_string(),
+              "^".to_string(),
+              " ".to_string(),
+            ];
+            chars.extend(('0'..='9').map(|ch| ch.to_string()));
+            chars.extend(('a'..='z').map(|ch| ch.to_string()));
+            chars.extend(('A'..='Z').map(|ch| ch.to_string()));
+            chars
+          }),
           work_done_progress_options: Default::default(),
           all_commit_characters: None,
           completion_item: None,
