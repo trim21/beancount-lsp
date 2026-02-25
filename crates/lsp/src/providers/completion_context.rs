@@ -35,6 +35,10 @@ pub(crate) enum CompletionMode<'a> {
     prefix: &'a str,
     range: Range,
   },
+  PayeeNarration {
+    prefix: &'a str,
+    range: Range,
+  },
 }
 
 #[derive(Debug, Clone)]
@@ -543,6 +547,54 @@ fn marker_completion_mode<'a>(marker: &MarkerToken<'a>) -> CompletionMode<'a> {
   }
 }
 
+fn transaction_string_completion_mode<'a>(
+  doc: &'a Document,
+  cursor_byte: usize,
+  directive: &ast::Directive<'_>,
+) -> Option<CompletionMode<'a>> {
+  let ast::Directive::Transaction(tx) = directive else {
+    return None;
+  };
+
+  let spans = [
+    tx.payee.as_ref().map(|value| value.span),
+    tx.narration.as_ref().map(|value| value.span),
+  ];
+
+  for span in spans.into_iter().flatten() {
+    if !(span.start <= cursor_byte && cursor_byte <= span.end) {
+      continue;
+    }
+
+    let span_text = doc.content().get(span.start..span.end)?;
+    let mut replace_start = span.start;
+    let mut replace_end = span.end;
+
+    if span_text.starts_with('"') {
+      replace_start = replace_start.saturating_add(1);
+    }
+    if span_text.ends_with('"') && replace_end > replace_start {
+      replace_end = replace_end.saturating_sub(1);
+    }
+
+    if replace_start > replace_end {
+      continue;
+    }
+
+    let prefix_end = cursor_byte.clamp(replace_start, replace_end);
+    let prefix = doc.content().get(replace_start..prefix_end)?;
+
+    let range = Range {
+      start: byte_to_lsp_position(&doc.rope, replace_start)?,
+      end: byte_to_lsp_position(&doc.rope, replace_end)?,
+    };
+
+    return Some(CompletionMode::PayeeNarration { prefix, range });
+  }
+
+  None
+}
+
 fn account_completion_mode<'a>(
   doc: &Document,
   line_ctx: &CompletionLineContext<'a>,
@@ -644,13 +696,19 @@ fn root_keyword_completion_mode<'a>(
 }
 
 fn determine_from_parsed_directive<'a>(
-  doc: &Document,
+  doc: &'a Document,
   line_ctx: &CompletionLineContext<'a>,
   directive: &ast::Directive<'_>,
   marker_ctx: Option<&MarkerToken<'a>>,
   date_keywords: &'static [&'static str],
   root_keywords: &'static [&'static str],
 ) -> Option<CompletionMode<'a>> {
+  if let Some(mode) =
+    transaction_string_completion_mode(doc, line_ctx.cursor_byte, directive)
+  {
+    return Some(mode);
+  }
+
   let in_account_context =
     is_within_account_context_parsed_directive(directive, line_ctx.cursor_byte);
   let supports_tag_link = matches!(
@@ -893,6 +951,23 @@ mod tests {
     ];
 
     assert_account_range(&lines, Position::new(1, 2), Position::new(1, 20));
+  }
+
+  #[test]
+  fn parsed_context_detects_transaction_string_completion() {
+    let lines = [
+      r#"2025-10-10 * "Pay|ee" "Narration""#,
+      r#"  Assets:Cash -1 CNY"#,
+      r#"  Expenses:Food"#,
+    ];
+    let (doc, pos) = doc_with_cursor(&lines);
+
+    let ctx = determine_completion_context(&doc, pos, DATE_KEYWORDS, ROOT_KEYWORDS)
+      .expect("expected payee/narration context");
+    match ctx {
+      CompletionMode::PayeeNarration { .. } => {}
+      other => panic!("unexpected completion hint: {other:?}"),
+    }
   }
 
   #[test]

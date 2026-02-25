@@ -86,6 +86,20 @@
           ],
           "default": null,
           "description": "Log level for the language server."
+        },
+        "beancount.completion_matchers": {
+          "scope": "resource",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ascii",
+              "quanpin",
+              "xiaohe"
+            ]
+          },
+          "default": [],
+          "description": "Completion matchers for payee and narration. Empty means ASCII default."
         }
       }
     },

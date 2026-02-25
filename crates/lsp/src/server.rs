@@ -145,11 +145,14 @@ pub struct Backend {
 struct InnerBackend {
   snapshot_rx: watch::Receiver<Arc<HashMap<Url, Arc<Document>>>>,
   root_uri: Option<Url>,
+  completion_matchers: Vec<completion::CompletionMatcher>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct InitializeConfig {
   pub root_file: Option<PathBuf>,
+  #[serde(default)]
+  pub completion_matchers: Vec<completion::CompletionMatcher>,
 }
 
 enum IndexerCommand {
@@ -492,6 +495,7 @@ impl LanguageServer for Backend {
       *guard = Some(InnerBackend {
         snapshot_rx,
         root_uri,
+        completion_matchers: config.completion_matchers,
       });
 
       if let Some(rx) = self.indexer_rx.lock().await.take() {
@@ -611,11 +615,12 @@ impl LanguageServer for Backend {
     let current_uri =
       normalize_uri(&params.text_document_position.text_document.uri.clone());
 
-    let (snapshot, root_uri) = self
+    let (snapshot, root_uri, completion_matchers) = self
       .with_inner(|inner| {
         let snapshot = inner.snapshot_rx.borrow().clone();
         let root_uri = inner.root_uri.clone();
-        (snapshot, root_uri)
+        let completion_matchers = inner.completion_matchers.clone();
+        (snapshot, root_uri, completion_matchers)
       })
       .await?;
 
@@ -636,8 +641,20 @@ impl LanguageServer for Backend {
     }
 
     let list = match root_uri.as_ref() {
-      Some(root_uri) => completion::completion(&docs, root_uri, &params),
-      None => completion::completion(&docs, &current_uri, &params),
+      Some(root_uri) => {
+        completion::completion_with_matchers(
+          &docs,
+          root_uri,
+          &params,
+          &completion_matchers,
+        )
+      }
+      None => completion::completion_with_matchers(
+        &docs,
+        &current_uri,
+        &params,
+        &completion_matchers,
+      ),
     };
 
     match &list {

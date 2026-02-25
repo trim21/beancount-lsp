@@ -76,7 +76,11 @@ async function start_or_restart_client(
     debug: server_executable,
   };
 
-  type InitializationOptions = { root_file: string };
+  type CompletionMatcher = "ascii" | "quanpin" | "xiaohe";
+  type InitializationOptions = {
+    root_file: string;
+    completion_matchers: CompletionMatcher[];
+  };
 
   const root_file = config.get<string>("root_file");
   if (!root_file || root_file.trim() === "") {
@@ -84,7 +88,15 @@ async function start_or_restart_client(
     return;
   }
 
-  const initializationOptions: InitializationOptions = { root_file };
+  const completion_matchers = config.get<CompletionMatcher[]>(
+    "completion_matchers",
+    [],
+  );
+
+  const initializationOptions: InitializationOptions = {
+    root_file,
+    completion_matchers,
+  };
 
   const client_options: LanguageClientOptions = {
     outputChannel: lspOutputChannel,

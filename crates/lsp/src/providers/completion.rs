@@ -3,6 +3,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use beancount_parser::ast;
+use ib_pinyin::matcher::PinyinMatcher;
+use ib_pinyin::pinyin::PinyinNotation;
+use serde::Deserialize;
 use strsim::jaro_winkler;
 use tower_lsp_server::ls_types::{
   CompletionItem, CompletionItemKind, CompletionList, CompletionParams,
@@ -20,6 +23,30 @@ const DATE_KEYWORDS: &[&str] =
 const ROOT_KEYWORDS: &[&str] = &[
   "include", "option", "pushtag", "poptag", "pushmeta", "popmeta",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum CompletionMatcher {
+  #[serde(rename = "ascii")]
+  Ascii,
+  #[serde(rename = "quanpin")]
+  Quanpin,
+  #[serde(rename = "xiaohe")]
+  Xiaohe,
+}
+
+fn effective_matchers(matchers: &[CompletionMatcher]) -> Vec<CompletionMatcher> {
+  if matchers.is_empty() {
+    return vec![CompletionMatcher::Ascii];
+  }
+
+  let mut deduped = Vec::with_capacity(matchers.len());
+  for matcher in matchers {
+    if !deduped.contains(matcher) {
+      deduped.push(*matcher);
+    }
+  }
+  deduped
+}
 
 fn determine_completion_context<'a>(
   doc: &'a Document,
@@ -187,6 +214,10 @@ fn insert_link_label<'a>(
 
   let label = content.trim_start_matches('^');
   insert_label(labels, label);
+}
+
+fn normalize_quoted_label(label: &str) -> &str {
+  label.trim().trim_matches('"').trim()
 }
 
 fn completion_items_for_account(
@@ -425,10 +456,126 @@ fn completion_items_for_link(
     .collect()
 }
 
+fn pinyin_notation_for_matcher(matcher: CompletionMatcher) -> Option<PinyinNotation> {
+  match matcher {
+    CompletionMatcher::Ascii => None,
+    CompletionMatcher::Quanpin => Some(PinyinNotation::Ascii),
+    CompletionMatcher::Xiaohe => {
+      Some(PinyinNotation::DiletterXiaohe)
+    }
+  }
+}
+
+fn matcher_score(
+  matcher: CompletionMatcher,
+  label: &str,
+  query: &str,
+) -> Option<u64> {
+  if query.is_empty() {
+    return Some(1_000_000);
+  }
+
+  match matcher {
+    CompletionMatcher::Ascii => {
+      if !fuzzy_match(label, query) {
+        return None;
+      }
+
+      Some((similarity_score(label, query) * 1_000_000.0).round() as u64)
+    }
+    CompletionMatcher::Quanpin | CompletionMatcher::Xiaohe => {
+      let notation = pinyin_notation_for_matcher(matcher)?;
+      let pinyin_match = PinyinMatcher::builder(query)
+        .pinyin_notations(notation)
+        .build();
+
+      if !pinyin_match.is_match(label) {
+        return None;
+      }
+
+      Some(700_000)
+    }
+  }
+}
+
+fn score_by_best_matcher(
+  label: &str,
+  query: &str,
+  matchers: &[CompletionMatcher],
+) -> Option<u64> {
+  let mut best = None;
+  for matcher in matchers {
+    let Some(score) = matcher_score(*matcher, label, query) else {
+      continue;
+    };
+
+    best = Some(best.map_or(score, |current: u64| current.max(score)));
+  }
+
+  best
+}
+
+fn completion_items_for_payee_narration(
+  documents: &HashMap<Url, Arc<Document>>,
+  root_uri: &Url,
+  prefix: &str,
+  replace_range: tower_lsp_server::ls_types::Range,
+  matchers: &[CompletionMatcher],
+) -> Vec<CompletionItem> {
+  let docs = documents_bfs(documents, root_uri);
+
+  let mut labels = HashSet::new();
+  for (_, doc) in &docs {
+    for dir in doc.ast() {
+      let ast::Directive::Transaction(tx) = dir else {
+        continue;
+      };
+
+      if let Some(payee) = &tx.payee {
+        insert_label(&mut labels, normalize_quoted_label(payee.content));
+      }
+      if let Some(narration) = &tx.narration {
+        insert_label(&mut labels, normalize_quoted_label(narration.content));
+      }
+    }
+  }
+
+  let mut scored: Vec<(&str, u64)> = labels
+    .into_iter()
+    .filter_map(|label| {
+      score_by_best_matcher(label, prefix, matchers).map(|score| (label, score))
+    })
+    .collect();
+
+  scored.sort_by_key(|(label, score)| (Reverse(*score), *label));
+
+  scored
+    .into_iter()
+    .map(|(label, _)| {
+      completion_item_with_edit(
+        label.to_string(),
+        CompletionItemKind::TEXT,
+        replace_range,
+        false,
+      )
+    })
+    .collect()
+}
+
+#[cfg(test)]
 pub fn completion(
   documents: &HashMap<Url, Arc<Document>>,
   root_uri: &Url,
   params: &CompletionParams,
+) -> Option<CompletionList> {
+  completion_with_matchers(documents, root_uri, params, &[])
+}
+
+pub fn completion_with_matchers(
+  documents: &HashMap<Url, Arc<Document>>,
+  root_uri: &Url,
+  params: &CompletionParams,
+  configured_matchers: &[CompletionMatcher],
 ) -> Option<CompletionList> {
   let uri = &params.text_document_position.text_document.uri;
   let position = params.text_document_position.position;
@@ -442,6 +589,8 @@ pub fn completion(
   };
 
   spdlog::debug!("completion for {:?}", ctx);
+
+  let effective_matchers = effective_matchers(configured_matchers);
 
   let items: Vec<CompletionItem> = match ctx {
     CompletionMode::Account {
@@ -471,6 +620,16 @@ pub fn completion(
       prefix,
       range: replace_range,
     } => completion_items_for_link(documents, root_uri, &doc, prefix, replace_range),
+    CompletionMode::PayeeNarration {
+      prefix,
+      range: replace_range,
+    } => completion_items_for_payee_narration(
+      documents,
+      root_uri,
+      prefix,
+      replace_range,
+      &effective_matchers,
+    ),
   };
 
   if items.is_empty() {
@@ -487,6 +646,7 @@ pub fn completion(
 mod tests {
   use super::*;
   use crate::doc;
+  use ib_pinyin::pinyin::PinyinData;
   use std::collections::HashSet;
   use std::str::FromStr;
   use tower_lsp_server::ls_types::{
@@ -535,7 +695,7 @@ mod tests {
   fn completes_accounts_and_replaces_prefix() {
     let uri = Url::from_str("file:///main.bean").unwrap();
     let content = "2023-01-01 open Assets:Cash\n";
-    let doc = build_doc(&uri, content);
+    let doc = build_doc(&uri, &content);
 
     let mut documents = HashMap::new();
     documents.insert(uri.clone(), doc);
@@ -658,7 +818,7 @@ mod tests {
   fn completes_when_cursor_at_account_end() {
     let uri = Url::from_str("file:///main.bean").unwrap();
     let content = "2023-01-01 open Assets:Cash\n";
-    let doc = build_doc(&uri, content);
+    let doc = build_doc(&uri, &content);
 
     let mut documents = HashMap::new();
     documents.insert(uri.clone(), doc);
@@ -696,15 +856,38 @@ mod tests {
   }
 
   #[test]
-  fn suppresses_completion_outside_account_nodes() {
+  fn completes_payee_narration_with_ascii_default() {
     let uri = Url::from_str("file:///main.bean").unwrap();
-    let content = "2023-01-01 open Assets:Cash\n2023-01-02 * \"Payee\" \"Narration\"\n";
-    let doc = build_doc(&uri, content);
+    let content = [
+      r#"2023-01-01 * "Lunch with team" "team meal""#,
+      r#"  Assets:Cash -20 CNY"#,
+      r#"  Expenses:Food"#,
+      r#"2023-01-02 * "Taxi" "ride home""#,
+      r#"  Assets:Cash -30 CNY"#,
+      r#"  Expenses:Transport"#,
+      r#"2023-01-03 * "Lu|" "draft""#,
+      r#"  Assets:Cash -1 CNY"#,
+      r#"  Expenses:Food"#,
+    ]
+    .join("\n");
+
+    let cursor_col = content
+      .lines()
+      .nth(6)
+      .and_then(|line| line.find('|'))
+      .expect("cursor marker present");
+    let content = {
+      let mut s = content;
+      let idx = s.find('|').expect("cursor marker present in content");
+      s.remove(idx);
+      s
+    };
+    let doc = build_doc(&uri, &content);
 
     let mut documents = HashMap::new();
     documents.insert(uri.clone(), doc);
 
-    let position = Position::new(1, 14); // inside the payee string, not an account node
+    let position = Position::new(6, u32::try_from(cursor_col).unwrap());
     let params = CompletionParams {
       text_document_position: TextDocumentPositionParams {
         text_document: TextDocumentIdentifier { uri: uri.clone() },
@@ -718,10 +901,67 @@ mod tests {
       }),
     };
 
-    let response = completion(&documents, &uri, &params);
+    let items = completion_items(completion(&documents, &uri, &params));
     assert!(
-      response.is_none(),
-      "expected no completion outside account nodes"
+      items.iter().any(|item| item.label == "Lunch with team"),
+      "expected payee/narration completion in transaction string"
+    );
+  }
+
+  #[test]
+  fn completes_payee_narration_with_quanpin_matcher() {
+    let uri = Url::from_str("file:///pinyin.bean").unwrap();
+    let content = [
+      r#"2023-01-01 * "拼音" "示例""#,
+      r#"  Assets:Cash -20 CNY"#,
+      r#"  Expenses:Food"#,
+      r#"2023-01-02 * "pinyin|" "draft""#,
+      r#"  Assets:Cash -1 CNY"#,
+      r#"  Expenses:Food"#,
+    ]
+    .join("\n");
+
+    let cursor_col = content
+      .lines()
+      .nth(3)
+      .and_then(|line| line.find('|'))
+      .expect("cursor marker present");
+    let content = {
+      let mut s = content;
+      let idx = s.find('|').expect("cursor marker present in content");
+      s.remove(idx);
+      s
+    };
+    let doc = build_doc(&uri, &content);
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), doc);
+
+    let position = Position::new(3, u32::try_from(cursor_col).unwrap());
+    let params = CompletionParams {
+      text_document_position: TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: uri.clone() },
+        position,
+      },
+      work_done_progress_params: Default::default(),
+      partial_result_params: Default::default(),
+      context: Some(CompletionContext {
+        trigger_kind: CompletionTriggerKind::INVOKED,
+        trigger_character: None,
+      }),
+    };
+
+    let items = completion_items(completion_with_matchers(
+      &documents,
+      &uri,
+      &params,
+      &[CompletionMatcher::Quanpin],
+    ));
+    let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+
+    assert!(
+      items.iter().any(|item| item.label == "拼音"),
+      "expected quanpin matcher to return Chinese payee completion, labels={labels:?}"
     );
   }
 
@@ -790,6 +1030,54 @@ mod tests {
   #[test]
   fn treats_nan_similarity_as_zero() {
     assert_eq!(normalize_similarity_score(f64::NAN), 0.0);
+  }
+
+  #[test]
+  fn empty_matcher_config_defaults_to_ascii() {
+    let matchers = effective_matchers(&[]);
+    assert_eq!(matchers, vec![CompletionMatcher::Ascii]);
+  }
+
+  #[test]
+  fn shuangpin_matcher_maps_to_xiaohe_notation() {
+    assert_eq!(
+      pinyin_notation_for_matcher(CompletionMatcher::Xiaohe),
+      Some(PinyinNotation::DiletterXiaohe)
+    );
+  }
+
+  #[test]
+  fn ib_pinyin_quanpin_smoke() {
+    let matcher = PinyinMatcher::builder("pinyin")
+      .pinyin_notations(PinyinNotation::Ascii)
+      .build();
+    assert!(matcher.is_match("拼音"));
+  }
+
+  #[test]
+  fn shuangpin_xiaohe_matcher_smoke() {
+    let data = PinyinData::new(PinyinNotation::DiletterXiaohe);
+    let mut pattern = String::new();
+
+    for ch in "拼音".chars() {
+      let mut found = None;
+      for pinyin in data.get_pinyins(ch) {
+        if let Some(value) = pinyin.notation(PinyinNotation::DiletterXiaohe) {
+          found = Some(value.to_string());
+          break;
+        }
+      }
+
+      let value = found.expect("expected xiaohe notation for character");
+      pattern.push_str(&value);
+    }
+
+    let score = score_by_best_matcher(
+      "拼音",
+      &pattern,
+      &[CompletionMatcher::Xiaohe],
+    );
+    assert!(score.is_some(), "expected xiaohe matcher score");
   }
 
   #[test]
