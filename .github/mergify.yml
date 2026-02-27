@@ -15,12 +15,14 @@ pull_request_rules:
           - label=ci:auto-merge
       - not:
           and:
-            - 'head*=renovate/lockfile-maintenance-*'
+            - 'head~=renovate/lockfile-maintenance-.*'
             - 'created-at>24h ago'
       - base=master
-      - check-success=vscode-test
       - check-success=cargo-test
+      - check-success=vscode-test
+      - check-success=autofix
       - check-success=wheel-test
+      - check-success=build-wheel
       - check-success=cargo-fmt-lint
     actions:
       merge:
