@@ -4,7 +4,7 @@ members = ["crates/lsp", "crates/lsp-py"]
 package.version = "0.0.0"
 
 [workspace.dependencies]
-beancount-core = { git = "https://github.com/trim21/beancount.git", rev = "50f898fe" }
+beancount-core = { git = "https://github.com/trim21/beancount.git", rev = "741ff872aafa02c44bf45059af68a743ceeaf255" }
 beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "50f898fe" }
 chumsky = "0.12.0"
 ropey = "1.6.1"
