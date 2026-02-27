@@ -13,9 +13,10 @@ pull_request_rules:
       - or:
           - '#approved-reviews-by>=1'
           - label=ci:auto-merge
-      - or:
-          - not: 'head *= renovate/lockfile-maintenance-*'
-          - 'created-at<=24h ago'
+      - not:
+          and:
+            - 'head*=renovate/lockfile-maintenance-*'
+            - 'created-at>24h ago'
       - base=master
       - check-success=vscode-test
       - check-success=cargo-test
