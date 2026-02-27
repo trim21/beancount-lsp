@@ -35,8 +35,8 @@
       "enabled": false
     },
     {
-      "group": "beancount crates",
-      "matchPackageNames": [
+      "groupName": "beancount crates",
+      "matchDepNames": [
         "beancount-*"
       ],
       "matchManagers": [
