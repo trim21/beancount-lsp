@@ -35,6 +35,15 @@
       "enabled": false
     },
     {
+      "group": "beancount crates",
+      "matchPackageNames": [
+        "beancount-*"
+      ],
+      "matchManagers": [
+        "cargo"
+      ]
+    },
+    {
       "matchPackageNames": [
         "@types/node",
         "microsoft/vscode",
