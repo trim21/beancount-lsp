@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: wheels-*
+          pattern: pypi-*
           merge-multiple: true
           path: dist
 
