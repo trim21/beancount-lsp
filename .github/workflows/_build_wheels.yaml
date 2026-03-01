@@ -12,20 +12,16 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-
-      - name: Install the latest version of uv
-        uses: astral-sh/setup-uv@v7
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
         with:
-          github-token: '${{ github.token }}'
-
-      - run: uv build --sdist .
-
+          command: sdist
+          args: --out dist
       - name: Upload sdist
         uses: actions/upload-artifact@v7
         with:
-          name: wheels-sdist
-          path: ./dist/*.tar.gz
-          if-no-files-found: 'error'
+          name: pypi-sdist
+          path: dist
 
   wheel:
     runs-on: ${{ matrix.platform.runner }}
@@ -35,18 +31,24 @@ jobs:
         platform:
           - runner: macos-15
             target: aarch64
+            zig_args: ''
           - runner: macos-15-intel
             target: x64
+            zig_args: ''
 
           - runner: windows-latest
             target: x64
+            zig_args: ''
           - runner: windows-11-arm
             target: aarch64
+            zig_args: ''
 
           - runner: ubuntu-24.04
             target: x64
+            zig_args: '--zig'
           - runner: ubuntu-24.04-arm
             target: aarch64
+            zig_args: '--zig'
 
     steps:
       - uses: actions/checkout@v6
@@ -54,7 +56,6 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - uses: actions/setup-python@v6
-        if: ${{ runner.os != 'Linux' }}
         with:
           python-version: '3.14'
 
@@ -62,16 +63,15 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: ${{ runner.os == 'Linux' && '--release --out dist --zig' || '--release --out dist' }}
+          args: --release --out dist ${{ matrix.platform.zig_args }}
           container: 'off'
           manylinux: '2_17'
 
-      - run: ls -ahl ./dist/
+      - run: ls -ahl dist
         shell: bash
 
       - name: Upload wheels
         uses: actions/upload-artifact@v7
         with:
-          name: wheels-${{ runner.os }}-${{ matrix.platform.target }}
-          path: ./dist/*.whl
-          if-no-files-found: 'error'
+          name: pypi-wheel-${{ runner.os }}-${{ matrix.platform.target }}
+          path: dist
