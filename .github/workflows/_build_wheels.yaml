@@ -62,7 +62,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: ${{ runner.os == 'Linux' && '--release --out dist --zig' || '--release --out dist' }}
+          args: --release --out dist
           container: 'off'
 
       - run: ls -ahl ./dist/
