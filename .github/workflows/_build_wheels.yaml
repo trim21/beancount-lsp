@@ -64,7 +64,6 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: ${{ runner.os == 'Linux' && '--release --out dist --zig' || '--release --out dist' }}
           container: 'off'
-          manylinux: '2_17'
 
       - run: ls -ahl ./dist/
         shell: bash
