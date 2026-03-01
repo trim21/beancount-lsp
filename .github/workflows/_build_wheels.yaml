@@ -76,13 +76,3 @@ jobs:
           name: wheels-${{ runner.os }}-${{ matrix.platform.target }}
           path: ./dist/*.whl
           if-no-files-found: 'error'
-
-  merge-wheel-artifact:
-    runs-on: ubuntu-24.04
-    needs: ['sdist', 'wheel']
-    steps:
-      - name: Merge Artifacts
-        uses: actions/upload-artifact/merge@v7
-        with:
-          name: wheel
-          pattern: wheels-*
