@@ -160,7 +160,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "beancount-core"
 version = "3.3.0-alpha.0"
-source = "git+https://github.com/trim21/beancount.git?rev=741ff872aafa02c44bf45059af68a743ceeaf255#741ff872aafa02c44bf45059af68a743ceeaf255"
+source = "git+https://github.com/trim21/beancount.git?rev=e90dca2dcad866d2ab3130c905752da09fa07de1#e90dca2dcad866d2ab3130c905752da09fa07de1"
 dependencies = [
  "beancount-parser",
  "chrono",
@@ -208,7 +208,7 @@ dependencies = [
 [[package]]
 name = "beancount-parser"
 version = "3.3.0-alpha.0"
-source = "git+https://github.com/trim21/beancount.git?rev=741ff872aafa02c44bf45059af68a743ceeaf255#741ff872aafa02c44bf45059af68a743ceeaf255"
+source = "git+https://github.com/trim21/beancount.git?rev=e90dca2dcad866d2ab3130c905752da09fa07de1#e90dca2dcad866d2ab3130c905752da09fa07de1"
 dependencies = [
  "anyhow",
  "ariadne",
