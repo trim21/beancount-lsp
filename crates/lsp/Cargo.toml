@@ -28,7 +28,7 @@ tower-lsp-server = { workspace = true }
 [dev-dependencies]
 criterion = "0.8.2"
 insta = { version = "1.46.3", features = ["glob"] }
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 
 [[bench]]
 name = "parse_document"
