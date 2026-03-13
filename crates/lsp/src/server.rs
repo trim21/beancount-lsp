@@ -545,16 +545,18 @@ impl LanguageServer for Backend {
           work_done_progress_options: Default::default(),
           all_commit_characters: None,
           completion_item: None,
+          ..Default::default()
         }),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(tower_lsp_server::ls_types::OneOf::Left(true)),
         semantic_tokens_provider: Some(semantic_tokens),
-        ..ServerCapabilities::default()
+        ..Default::default()
       },
       server_info: Some(ServerInfo {
         name: "beancount-lsp".to_owned(),
         version: None,
       }),
+      ..Default::default()
     })
   }
 
