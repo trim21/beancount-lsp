@@ -6,17 +6,16 @@ pull_request_rules:
       label:
         toggle:
           - conflict
-
   - name: Automatic merge on approval
     conditions:
-      - '#commits-behind=0'
+      - "#commits-behind=0"
       - or:
-          - '#approved-reviews-by>=1'
+          - "#approved-reviews-by>=1"
           - label=ci:auto-merge
       - not:
           and:
-            - 'head*=renovate/lockfile-maintenance-*'
-            - 'created-at>24h ago'
+            - head*=renovate/lockfile-maintenance-*
+            - created-at>24h ago
       - base=master
       - check-success=vscode-test
       - check-success=cargo-test
@@ -25,3 +24,4 @@ pull_request_rules:
     actions:
       merge:
         method: squash
+queue_rules: []
