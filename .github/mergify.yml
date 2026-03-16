@@ -5,7 +5,7 @@ merge_queue:
 
 queue_rules:
   - name: renovate
-    update_method: rebase
+    update_method: merge
 
 pull_request_rules:
   - name: label conflicts
