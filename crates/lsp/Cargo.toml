@@ -27,7 +27,7 @@ tower-lsp-server = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
-insta = { version = "1.46.3", features = ["glob"] }
+insta = { version = "1.47.2", features = ["glob"] }
 tempfile = "3.27.0"
 
 [[bench]]
