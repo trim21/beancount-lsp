@@ -8,7 +8,7 @@ beancount-core = { git = "https://github.com/trim21/beancount.git", rev = "e90dc
 beancount-parser = { git = "https://github.com/trim21/beancount.git", rev = "e90dca2dcad866d2ab3130c905752da09fa07de1" }
 chumsky = "0.12.0"
 ropey = "1.6.1"
-tokio = { version = "1.51.1", features = ["fs", "io-std", "macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1.52.1", features = ["fs", "io-std", "macros", "rt-multi-thread", "sync"] }
 tower-lsp-server = "0.23.0"
 
 [patch.crates-io]
