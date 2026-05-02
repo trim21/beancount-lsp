@@ -24,7 +24,7 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v8.1.0
         with:
           github-token: '${{ github.token }}'
 

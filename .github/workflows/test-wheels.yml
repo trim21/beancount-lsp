@@ -54,7 +54,7 @@ jobs:
           python-version: '${{ matrix.python }}'
 
       - name: Install the latest version of uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           github-token: '${{ github.token }}'
 
