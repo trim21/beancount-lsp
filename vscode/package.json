@@ -30,7 +30,7 @@
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.9.1",
     "esbuild": "^0.28.0",
-    "eslint": "^10.2.0",
+    "eslint": "^10.3.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-simple-import-sort": "^13.0.0",
     "tslib": "^2.8.1",
