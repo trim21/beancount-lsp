@@ -179,7 +179,7 @@ dependencies = [
  "anyhow",
  "beancount-core",
  "beancount-parser",
- "chumsky",
+ "chumsky 0.13.0",
  "clap",
  "criterion",
  "glob",
@@ -212,7 +212,7 @@ source = "git+https://github.com/trim21/beancount.git?rev=d996b981243349786ff983
 dependencies = [
  "anyhow",
  "ariadne",
- "chumsky",
+ "chumsky 0.12.0",
  "jiff",
  "ropey",
  "rust_decimal",
@@ -381,6 +381,20 @@ checksum = "4ba4a05c9ce83b07de31b31c874e87c069881ac4355db9e752e3a55c11ec75a6"
 dependencies = [
  "hashbrown 0.15.5",
  "regex-automata 0.3.9",
+ "serde",
+ "stacker",
+ "unicode-ident",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "chumsky"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0d2bfadce76f963d776feff99db6dc33783829539258314776383b33e2a00f8"
+dependencies = [
+ "hashbrown 0.15.5",
+ "regex-automata 0.4.14",
  "serde",
  "stacker",
  "unicode-ident",
