@@ -18,6 +18,13 @@
     "lint": "eslint -c eslint.config.mjs --ext .ts ./src"
   },
   "packageManager": "pnpm@11.5.3",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@vscode/vsce-sign",
+      "esbuild",
+      "keytar"
+    ]
+  },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   },
