@@ -1,5 +1,6 @@
 ---
 source: crates/lsp/src/providers/semantic_tokens.rs
+assertion_line: 730
 expression: actual
 ---
 0:0 len=19 type=comment
@@ -8,6 +9,7 @@ expression: actual
 1:28 len=3 type=class
 1:32 len=14 type=comment
 2:0 len=10 type=number
+2:11 len=5 type=function
 3:0 len=10 type=number
 3:11 len=7 type=function
 3:31 len=1 type=number
