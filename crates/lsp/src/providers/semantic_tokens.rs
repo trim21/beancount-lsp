@@ -169,6 +169,7 @@ fn collect_directive_tokens(
       collect_key_values(content, &open.key_values, out);
     }
     ast::Directive::Close(close) => {
+      push_span(content, close.keyword, TokenKind::Function, out);
       push_with_span(content, &close.date, TokenKind::Number, out);
       push_opt_with_span(content, &close.comment, TokenKind::Comment, out);
       collect_key_values(content, &close.key_values, out);
