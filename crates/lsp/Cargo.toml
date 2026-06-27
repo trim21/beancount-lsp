@@ -9,7 +9,7 @@ default = []
 pyo3 = ["dep:pyo3"]
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 beancount-core = { workspace = true }
 beancount-parser = { workspace = true }
 chumsky = { workspace = true }
