@@ -20,6 +20,7 @@ let client: LanguageClient | undefined;
 
 const lspOutputChannel = vscode.window.createOutputChannel(
   "beancount-language-server (server)",
+  { log: true },
 );
 
 const error_message = `
