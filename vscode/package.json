@@ -17,7 +17,7 @@
     "build": "pnpm run build-base && pnpm run package",
     "lint": "eslint -c eslint.config.mjs --ext .ts ./src"
   },
-  "packageManager": "pnpm@11.8.0",
+  "packageManager": "pnpm@11.9.0",
   "dependencies": {
     "vscode-languageclient": "^10.0.1"
   },
