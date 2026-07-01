@@ -42,4 +42,4 @@ tasks:
     cmds:
       - git add pyproject.toml
       - 'git commit -m "release: {{.VERSION}}"'
-      - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}" -a'
+      - 'git tag "v{{.VERSION}}" -m "v{{.VERSION}}"'
