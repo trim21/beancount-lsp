@@ -53,7 +53,8 @@ fn infers_currency_for_multiple_postings_without_currency() {
   assert!(
     doc.inferrence_errors.is_empty(),
     "expected no inference errors, got: {:?}",
-    doc.inferrence_errors
+    doc
+      .inferrence_errors
       .iter()
       .map(|e| &e.message)
       .collect::<Vec<_>>()
@@ -71,11 +72,8 @@ fn infers_currency_for_multiple_postings_without_currency() {
         );
       }
       // Verify balanced: 1 + 2 + (-3) = 0
-      let numbers: Vec<&str> = tx
-        .postings
-        .iter()
-        .map(|p| p.amount.raw.as_str())
-        .collect();
+      let numbers: Vec<&str> =
+        tx.postings.iter().map(|p| p.amount.raw.as_str()).collect();
       assert!(
         numbers.contains(&"1") && numbers.contains(&"2") && numbers.contains(&"-3"),
         "expected numbers [1, 2, -3], got {numbers:?}"
