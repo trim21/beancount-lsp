@@ -19,7 +19,7 @@
   },
   "packageManager": "pnpm@11.9.0",
   "dependencies": {
-    "vscode-languageclient": "^10.0.1"
+    "vscode-languageclient": "^10.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
