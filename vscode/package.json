@@ -17,16 +17,16 @@
     "build": "pnpm run build-base && pnpm run package",
     "lint": "eslint -c eslint.config.mjs --ext .ts ./src"
   },
-  "packageManager": "pnpm@11.8.0",
+  "packageManager": "pnpm@11.9.0",
   "dependencies": {
-    "vscode-languageclient": "^10.0.1"
+    "vscode-languageclient": "^10.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.0",
     "@types/vscode": "^1.100.0",
-    "@typescript-eslint/eslint-plugin": "^8.62.0",
-    "@typescript-eslint/parser": "^8.62.0",
+    "@typescript-eslint/eslint-plugin": "^8.62.1",
+    "@typescript-eslint/parser": "^8.62.1",
     "@vscode/test-electron": "^3.0.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
@@ -35,7 +35,7 @@
     "eslint-plugin-simple-import-sort": "^13.0.0",
     "tslib": "^2.8.1",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.0"
+    "typescript-eslint": "^8.62.1"
   },
   "main": "./out/extension",
   "contributes": {
