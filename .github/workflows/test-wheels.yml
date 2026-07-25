@@ -49,12 +49,12 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '${{ matrix.python }}'
 
       - name: Install the latest version of uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           github-token: '${{ github.token }}'
 
