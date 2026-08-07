@@ -13,7 +13,7 @@ def main():
     filename = sys.argv[1]
     try:
         _, errors, _ = load_file(filename)
-    except Exception as exc:  # broad but we want to return diagnostics
+    except Exception as exc:  # noqa: BLE001 - broad but we want to return diagnostics
         print(json.dumps([{"message": str(exc), "lineno": None, "filename": filename}]))
         return
 
