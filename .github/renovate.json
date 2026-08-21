@@ -3,8 +3,7 @@
   "extends": [
     "github>trim21/renovate-config",
     "github>trim21/renovate-config:python",
-    "github>trim21/renovate-config:monthly",
-    "github>trim21/renovate-config:rust"
+    "github>trim21/renovate-config:monthly"
   ],
   "rebaseWhen": "conflicted",
   "prConcurrentLimit": 3,
