@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: trim21/setup-rust@v0.0.1
+      - uses: trim21/setup-rust@v0.0.2
 
       - name: Install nextest
         uses: taiki-e/install-action@v2

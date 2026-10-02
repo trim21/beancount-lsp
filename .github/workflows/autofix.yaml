@@ -15,7 +15,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - uses: trim21/setup-rust@v0.0.1
+      - uses: trim21/setup-rust@v0.0.2
 
       - run: uv tool run prek -- run -a || true
       - run: cargo fmt || true
