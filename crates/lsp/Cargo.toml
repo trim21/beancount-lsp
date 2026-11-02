@@ -15,11 +15,11 @@ beancount-parser = { workspace = true }
 chumsky = { workspace = true }
 clap = { version = "4.6.7", features = ["derive"] }
 glob = "0.3.4"
-lru = "0.18.5"
-pyo3 = { version = "0.29.3", features = ["auto-initialize", "abi3-py310", "generate-import-lib"], optional = true }
+lru = "0.19.0"
+pyo3 = { version = "0.30.1", features = ["auto-initialize", "abi3-py310", "generate-import-lib"], optional = true }
 ropey = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 spdlog-rs = "0.5.3"
 strsim = "0.11.1"
 tokio = { workspace = true }
@@ -27,7 +27,7 @@ tower-lsp-server = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
-insta = { version = "1.48.0", features = ["glob"] }
+insta = { version = "1.49.0", features = ["glob"] }
 tempfile = "3.27.0"
 
 [[bench]]
