@@ -89,7 +89,11 @@ async function start_or_restart_client(
 
   const client_options: LanguageClientOptions = {
     outputChannel: lspOutputChannel,
-    documentSelector: [{ scheme: "file", language: "beancount" }],
+    // `git` covers the original side of SCM diff editors so semantic tokens reach it too.
+    documentSelector: [
+      { scheme: "file", language: "beancount" },
+      { scheme: "git", language: "beancount" },
+    ],
     synchronize: {
       // Notify the server about file changes to beancount files contained in the workspace
       fileEvents: vscode.workspace.createFileSystemWatcher("**/.{bean,beancount}"),
