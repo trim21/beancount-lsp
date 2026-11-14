@@ -6,6 +6,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use tower_lsp_server::ls_types::Uri;
@@ -14,6 +15,7 @@ struct Server {
   child: Child,
   stdin: ChildStdin,
   stdout: BufReader<ChildStdout>,
+  stderr: Arc<Mutex<String>>,
   refreshes: usize,
 }
 
@@ -25,17 +27,30 @@ impl Server {
       .current_dir(working_dir)
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
-      .stderr(Stdio::null())
+      .stderr(Stdio::piped())
       .spawn()
       .expect("failed to spawn beancount-lsp");
 
     let stdin = child.stdin.take().expect("stdin");
     let stdout = BufReader::new(child.stdout.take().expect("stdout"));
 
+    let stderr = Arc::new(Mutex::new(String::new()));
+    let child_stderr = child.stderr.take().expect("stderr");
+    let collected = Arc::clone(&stderr);
+    std::thread::spawn(move || {
+      let mut reader = BufReader::new(child_stderr);
+      let mut line = String::new();
+      while reader.read_line(&mut line).unwrap_or(0) > 0 {
+        collected.lock().unwrap().push_str(&line);
+        line.clear();
+      }
+    });
+
     Self {
       child,
       stdin,
       stdout,
+      stderr,
       refreshes: 0,
     }
   }
@@ -56,7 +71,12 @@ impl Server {
     loop {
       let mut line = String::new();
       let read = self.stdout.read_line(&mut line).expect("failed to read");
-      assert_ne!(read, 0, "server closed stdout");
+      assert_ne!(
+        read,
+        0,
+        "server closed stdout, stderr:\n{}",
+        self.stderr.lock().unwrap()
+      );
 
       let line = line.trim_end();
       if line.is_empty() {
