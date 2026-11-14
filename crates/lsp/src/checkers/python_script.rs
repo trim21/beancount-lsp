@@ -90,14 +90,136 @@ impl Checker for PythonScriptChecker {
 
         CheckerDiagnostic {
           message,
-          // beancount reports human-friendly (1-based) line numbers; keep them as-is and
-          // let the LSP layer treat missing values as 0.
-          lineno: lineno.map(|v| v - 1),
+          // beancount reports human-friendly (1-based) line numbers; file-level errors use 0,
+          // which must not underflow when converted to the LSP's 0-based lines.
+          lineno: lineno.map(|v| v.saturating_sub(1)),
           filename: filename.filter(|name| !name.is_empty()),
         }
       })
       .collect();
 
     Ok(diagnostics)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::test_utils::lines;
+  use std::fs;
+  use std::path::Path;
+
+  /// The checker needs a Python that can import beancount. Prefer the repo-local venv (the
+  /// server itself probes `.venv/bin/python` relative to its working directory) and fall back
+  /// to whatever `find_python_with_beancount` discovers, so this test skips instead of failing
+  /// on machines without beancount.
+  fn beancount_checker() -> Option<PythonScriptChecker> {
+    let venv = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.venv");
+    let venv_python = if cfg!(windows) {
+      venv.join("Scripts/python.exe")
+    } else {
+      venv.join("bin/python")
+    };
+
+    if venv_python.is_file() && can_import_beancount(&venv_python) {
+      return Some(PythonScriptChecker::new(venv_python));
+    }
+
+    find_python_with_beancount().map(PythonScriptChecker::new)
+  }
+
+  fn write_ledger(dir: &Path, name: &str, content: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, content).unwrap();
+    path
+  }
+
+  #[test]
+  fn reports_balance_assertion_failure() {
+    let Some(checker) = beancount_checker() else {
+      eprintln!("skipping: no python interpreter with beancount installed");
+      return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let accounts = write_ledger(
+      dir.path(),
+      "accounts.bean",
+      &lines(&[
+        r#"2022-01-01 open Assets:Cash"#,
+        r#"2022-01-01 open Expenses:Food"#,
+        r#"2022-01-02 * "lunch""#,
+        r#"  Assets:Cash -10 USD"#,
+        r#"  Expenses:Food 10 USD"#,
+        r#"2022-01-03 balance Assets:Cash 0 USD"#,
+      ]),
+    );
+    let root = write_ledger(dir.path(), "main.bean", r#"include "accounts.bean""#);
+
+    let diags = checker
+      .run(root.to_str().unwrap())
+      .expect("checker should succeed");
+
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    let diag = &diags[0];
+    assert!(
+      diag.message.contains("Balance failed for 'Assets:Cash'"),
+      "{diag:?}"
+    );
+    // beancount reports 1-based line numbers, the checker stores 0-based ones.
+    assert_eq!(diag.lineno, Some(5));
+    assert_eq!(
+      diag.filename.as_deref().map(Path::new),
+      Some(accounts.as_path())
+    );
+  }
+
+  #[test]
+  fn reports_nothing_for_valid_ledger() {
+    let Some(checker) = beancount_checker() else {
+      eprintln!("skipping: no python interpreter with beancount installed");
+      return;
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_ledger(
+      dir.path(),
+      "main.bean",
+      &lines(&[
+        r#"2022-01-01 open Assets:Cash"#,
+        r#"2022-01-01 open Expenses:Food"#,
+        r#"2022-01-02 * "lunch""#,
+        r#"  Assets:Cash -10 USD"#,
+        r#"  Expenses:Food 10 USD"#,
+        r#"2022-01-03 balance Assets:Cash -10 USD"#,
+      ]),
+    );
+
+    let diags = checker
+      .run(root.to_str().unwrap())
+      .expect("checker should succeed");
+
+    assert!(diags.is_empty(), "{diags:?}");
+  }
+
+  #[test]
+  fn missing_ledger_is_reported_without_line() {
+    let Some(checker) = beancount_checker() else {
+      eprintln!("skipping: no python interpreter with beancount installed");
+      return;
+    };
+
+    let diags = checker
+      .run("/nonexistent/main.bean")
+      .expect("beancount reports a missing ledger as an error entry");
+
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert!(
+      diags[0].message.contains("does not exist"),
+      "{:?}",
+      diags[0]
+    );
+    // beancount uses line 0 for file-level errors; it must survive the 0-based conversion.
+    assert_eq!(diags[0].lineno, Some(0));
   }
 }
