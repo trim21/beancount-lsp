@@ -138,6 +138,9 @@ pub struct Backend {
   client: Client,
   inner: Arc<RwLock<Option<InnerBackend>>>, // initialized state
   documents_text: Arc<RwLock<HashMap<Url, Arc<String>>>>,
+  // Client-reported URI by canonical URI: a client that opened a file through a symlinked path
+  // keeps that path, so diagnostics published under the canonicalized one would never reach it.
+  client_uris: Arc<RwLock<HashMap<Url, Url>>>,
   checker: Option<Arc<dyn Checker>>,
   // Desired checker generation; a bump asks the worker for a new run.
   checker_wanted_tx: watch::Sender<u64>,
@@ -268,6 +271,14 @@ fn merge_diagnostics(
   items
 }
 
+/// Our keys are canonical paths, but the client only knows the URI it opened the file with.
+fn client_uri(canonical: &Url, client_uris: &HashMap<Url, Url>) -> Url {
+  client_uris
+    .get(canonical)
+    .cloned()
+    .unwrap_or_else(|| canonical.clone())
+}
+
 /// Pull diagnostics are negotiated through capabilities: only clients that declare
 /// `textDocument/diagnostic` support get `diagnosticProvider`, everything else keeps
 /// receiving pushed diagnostics.
@@ -326,6 +337,7 @@ impl Backend {
       client,
       inner: Arc::new(RwLock::new(None)),
       documents_text: Arc::new(RwLock::new(HashMap::new())),
+      client_uris: Arc::new(RwLock::new(HashMap::new())),
       checker: checkers::create().map(Arc::<dyn Checker>::from),
       checker_wanted_tx,
       checker_wanted_rx: Arc::new(Mutex::new(Some(checker_wanted_rx))),
@@ -512,18 +524,19 @@ impl Backend {
     // Never wait for a pending run here: buffer diagnostics must show up immediately, and the
     // checker worker publishes again once its own results land.
     let checker = Arc::clone(&self.checker_results_rx.borrow());
+    let client_uris = self.client_uris.read().await.clone();
     let mut current: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
 
     for (uri, doc) in snapshot.iter() {
       current
-        .entry(uri.clone())
+        .entry(client_uri(uri, &client_uris))
         .or_default()
         .extend(document_diagnostics(doc.as_ref()));
     }
 
     for (uri, diags) in &checker.by_uri {
       current
-        .entry(uri.clone())
+        .entry(client_uri(uri, &client_uris))
         .or_default()
         .extend(diags.iter().cloned());
     }
@@ -599,6 +612,13 @@ impl Backend {
     {
       let mut guard = self.documents_text.write().await;
       guard.insert(normalized_uri.clone(), Arc::new(text.clone()));
+    }
+    if normalized_uri != uri {
+      self
+        .client_uris
+        .write()
+        .await
+        .insert(normalized_uri.clone(), uri);
     }
     let _ = self.indexer_tx.send(IndexerCommand::Update {
       uri: normalized_uri,
@@ -749,8 +769,11 @@ impl LanguageServer for Backend {
 
   async fn did_close(&self, params: DidCloseTextDocumentParams) {
     let normalized_uri = normalize_uri(&params.text_document.uri);
-    let mut guard = self.documents_text.write().await;
-    guard.remove(&normalized_uri);
+    {
+      let mut guard = self.documents_text.write().await;
+      guard.remove(&normalized_uri);
+    }
+    self.client_uris.write().await.remove(&normalized_uri);
   }
 
   async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -795,12 +818,13 @@ impl LanguageServer for Backend {
   ) -> Result<WorkspaceDiagnosticReportResult> {
     let snapshot = self.snapshot().await.unwrap_or_default();
     let checker = self.checker_results().await;
+    let client_uris = self.client_uris.read().await.clone();
 
     let mut items = Vec::with_capacity(snapshot.len());
     for (uri, doc) in snapshot.iter() {
       items.push(WorkspaceDocumentDiagnosticReport::Full(
         WorkspaceFullDocumentDiagnosticReport {
-          uri: uri.clone(),
+          uri: client_uri(uri, &client_uris),
           version: None,
           full_document_diagnostic_report: FullDocumentDiagnosticReport {
             result_id: None,

@@ -426,3 +426,59 @@ fn push_diagnostics_include_checker_errors() {
   drop(ledger);
   server.shutdown();
 }
+
+/// A client that opened a file through a symlinked directory keeps that path, so diagnostics have
+/// to come back on the URI it sent instead of the canonicalized one, which it does not know.
+#[cfg(unix)]
+#[test]
+fn push_diagnostics_use_the_uri_the_client_opened() {
+  let ledger = Ledger::new();
+  let link_dir = tempfile::tempdir().expect("tempdir");
+  let ledger_link = link_dir.path().join("ledger");
+  std::os::unix::fs::symlink(ledger.root.parent().expect("ledger dir"), &ledger_link)
+    .expect("create symlink");
+
+  let client_uri = ledger_uri(&ledger_link.join("accounts.bean"));
+  assert_ne!(
+    client_uri,
+    ledger_uri(&ledger.accounts),
+    "the client path must differ from the canonical one"
+  );
+
+  let mut server = Server::start(&workspace_root());
+  server.initialize(false, &ledger.root);
+  server.notify("initialized", json!({}));
+  server.notify(
+    "textDocument/didOpen",
+    json!({
+      "textDocument": {
+        "uri": client_uri,
+        "languageId": "beancount",
+        "version": 1,
+        // Unbalanced, so the buffer alone produces a diagnostic.
+        "text": "2022-01-01 * \"lunch\" \"unbalanced\"\n  Assets:Cash -10 USD\n  Expenses:Food 5 USD\n",
+      },
+    }),
+  );
+
+  loop {
+    let message = server.read();
+    if message.get("method").and_then(Value::as_str)
+      == Some("textDocument/publishDiagnostics")
+    {
+      let params = &message["params"];
+      if params["uri"] == client_uri.as_str()
+        && !params["diagnostics"]
+          .as_array()
+          .expect("diagnostics")
+          .is_empty()
+      {
+        break;
+      }
+    }
+    server.answer_request(&message);
+  }
+
+  drop(ledger);
+  server.shutdown();
+}
