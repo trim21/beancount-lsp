@@ -36,11 +36,15 @@ jobs:
           tool: nextest
 
       # The ledger checker only runs when a Python with beancount is reachable, and the
-      # diagnostics tests skip without it. `uv sync` creates `.venv` at the repo root, where the
+      # diagnostics tests skip without it. uv sync creates `.venv` at the repo root, where the
       # server looks for it relative to its working directory.
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          activate-environment: true
           enable-cache: true
 
       - name: Install beancount for checker tests

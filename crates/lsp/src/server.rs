@@ -1037,22 +1037,27 @@ include "common.bean"
     assert_eq!(docs.len(), 6);
   }
 
+  fn ledger_uri(path: &Path) -> Url {
+    Url::from_file_path(canonical_or_original(path)).expect("absolute path")
+  }
+
   #[test]
   fn checker_diagnostics_are_attributed_to_reported_file() {
-    let root_uri = Url::from_file_path("/tmp/ledger/main.bean").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root_uri = ledger_uri(&dir.path().join("main.bean"));
+    let accounts = dir.path().join("accounts.bean");
     let diags = vec![CheckerDiagnostic {
       message: "Balance failed for 'Assets:Cash'".to_owned(),
-      filename: Some("/tmp/ledger/accounts.bean".to_owned()),
+      filename: Some(accounts.to_string_lossy().into_owned()),
       lineno: Some(5),
     }];
 
     let by_uri = checker_diagnostics_by_uri(diags, "python-script", &root_uri);
 
-    let accounts_uri = Url::from_file_path("/tmp/ledger/accounts.bean").unwrap();
     assert!(!by_uri.contains_key(&root_uri), "{by_uri:?}");
 
     let items = by_uri
-      .get(&accounts_uri)
+      .get(&ledger_uri(&accounts))
       .expect("diagnostic on accounts.bean");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].range.start.line, 5);
@@ -1064,7 +1069,8 @@ include "common.bean"
 
   #[test]
   fn checker_diagnostics_without_file_fall_back_to_root() {
-    let root_uri = Url::from_file_path("/tmp/ledger/main.bean").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root_uri = ledger_uri(&dir.path().join("main.bean"));
     let diags = vec![CheckerDiagnostic {
       message: "Cannot infer currency".to_owned(),
       filename: None,
