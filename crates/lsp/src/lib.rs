@@ -164,7 +164,12 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
   let stdout = tokio::io::stdout();
 
   let (service, socket) = LspService::build(Backend::new).finish();
-  Server::new(stdin, stdout, socket).serve(service).await;
+  // Pull diagnostics block on the ledger checker, so give requests enough slots to keep
+  // text sync (which shares the same concurrency budget) responsive.
+  Server::new(stdin, stdout, socket)
+    .concurrency_level(16)
+    .serve(service)
+    .await;
 
   Ok(())
 }
