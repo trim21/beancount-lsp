@@ -3,18 +3,23 @@
 //! (`textDocument/publishDiagnostics`). They also cover the ledger checker's contribution, which
 //! only shows up when a Python with beancount is reachable.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tower_lsp_server::ls_types::Uri;
 
+/// A message that never shows up has to fail the test instead of wedging the whole job.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 struct Server {
   child: Child,
   stdin: ChildStdin,
-  stdout: BufReader<ChildStdout>,
+  messages: Receiver<Result<Value, String>>,
   stderr: Arc<Mutex<String>>,
   refreshes: usize,
 }
@@ -32,7 +37,7 @@ impl Server {
       .expect("failed to spawn beancount-lsp");
 
     let stdin = child.stdin.take().expect("stdin");
-    let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let stdout = child.stdout.take().expect("stdout");
 
     let stderr = Arc::new(Mutex::new(String::new()));
     let child_stderr = child.stderr.take().expect("stderr");
@@ -49,7 +54,7 @@ impl Server {
     Self {
       child,
       stdin,
-      stdout,
+      messages: spawn_message_reader(stdout),
       stderr,
       refreshes: 0,
     }
@@ -67,30 +72,26 @@ impl Server {
   }
 
   fn read(&mut self) -> Value {
-    let mut length = 0usize;
-    loop {
-      let mut line = String::new();
-      let read = self.stdout.read_line(&mut line).expect("failed to read");
-      assert_ne!(
-        read,
-        0,
-        "server closed stdout, stderr:\n{}",
+    match self.messages.recv_timeout(READ_TIMEOUT) {
+      Ok(Ok(message)) => message,
+      Ok(Err(err)) => panic!("{err}, stderr:\n{}", self.stderr.lock().unwrap()),
+      Err(RecvTimeoutError::Timeout) => panic!(
+        "no message from the server within {READ_TIMEOUT:?}, stderr:\n{}",
         self.stderr.lock().unwrap()
-      );
-
-      let line = line.trim_end();
-      if line.is_empty() {
-        break;
-      }
-
-      if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-        length = value.trim().parse().expect("invalid content length");
-      }
+      ),
+      Err(RecvTimeoutError::Disconnected) => panic!(
+        "server message reader stopped, stderr:\n{}",
+        self.stderr.lock().unwrap()
+      ),
     }
+  }
 
-    let mut body = vec![0u8; length];
-    self.stdout.read_exact(&mut body).expect("truncated body");
-    serde_json::from_slice(&body).expect("invalid json")
+  /// Server -> client requests leave the server waiting for a response, so answer them.
+  fn answer_request(&mut self, message: &Value) {
+    let id = message.get("id").cloned().unwrap_or(Value::Null);
+    if message.get("method").is_some() && !id.is_null() {
+      self.send(json!({"jsonrpc": "2.0", "id": id, "result": null}));
+    }
   }
 
   /// Send a request and wait for its response, answering anything the server asks in between.
@@ -107,17 +108,12 @@ impl Server {
         return message.get("result").cloned().unwrap_or(Value::Null);
       }
 
-      if let Some(method) = message.get("method").and_then(Value::as_str) {
-        if method == "workspace/diagnostic/refresh" {
-          self.refreshes += 1;
-        }
-
-        let response_id = message.get("id").cloned().unwrap_or(Value::Null);
-        if !response_id.is_null() {
-          // Server -> client request: answer so the server does not block on us.
-          self.send(json!({"jsonrpc": "2.0", "id": response_id, "result": null}));
-        }
+      if message.get("method").and_then(Value::as_str)
+        == Some("workspace/diagnostic/refresh")
+      {
+        self.refreshes += 1;
       }
+      self.answer_request(&message);
     }
   }
 
@@ -143,7 +139,20 @@ impl Server {
   fn shutdown(mut self) {
     self.request(99, "shutdown", Value::Null);
     self.notify("exit", Value::Null);
-    let _ = self.child.wait();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+      match self.child.try_wait().expect("failed to check the server") {
+        Some(_) => return,
+        None if Instant::now() < deadline => {
+          std::thread::sleep(Duration::from_millis(50))
+        }
+        None => panic!(
+          "server did not exit after shutdown, stderr:\n{}",
+          self.stderr.lock().unwrap()
+        ),
+      }
+    }
   }
 }
 
@@ -152,6 +161,70 @@ impl Drop for Server {
     let _ = self.child.kill();
     let _ = self.child.wait();
   }
+}
+
+/// Read one framed JSON-RPC message from the server's stdout.
+fn read_message(stdout: &mut impl BufRead) -> Result<Value, String> {
+  let mut length = 0usize;
+  loop {
+    let mut line = String::new();
+    let read = stdout.read_line(&mut line).map_err(|err| err.to_string())?;
+    if read == 0 {
+      return Err("server closed stdout".to_owned());
+    }
+
+    let line = line.trim_end();
+    if line.is_empty() {
+      break;
+    }
+
+    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+      length = value
+        .trim()
+        .parse()
+        .map_err(|err: std::num::ParseIntError| {
+          format!("invalid content length: {err}")
+        })?;
+    }
+  }
+
+  let mut body = vec![0u8; length];
+  stdout
+    .read_exact(&mut body)
+    .map_err(|err| err.to_string())?;
+  serde_json::from_slice(&body).map_err(|err| err.to_string())
+}
+
+/// Own stdout on its own thread: reading a pipe has no timeout, so the test would block forever
+/// waiting for a message the server never sends.
+fn spawn_message_reader(stdout: ChildStdout) -> Receiver<Result<Value, String>> {
+  let (tx, rx) = mpsc::channel();
+
+  std::thread::spawn(move || {
+    let mut stdout = BufReader::new(stdout);
+    loop {
+      let message = read_message(&mut stdout);
+      let failed = message.is_err();
+      if tx.send(message).is_err() || failed {
+        return;
+      }
+    }
+  });
+
+  rx
+}
+
+/// The server canonicalizes paths before publishing diagnostics, so the URI it reports only
+/// matches the ledger's path after both sides go through `canonicalize`: on macOS the tempdir is
+/// `/var/folders/...` while canonicalize resolves it to `/private/var/folders/...`.
+fn same_file(reported_uri: &Value, path: &Path) -> bool {
+  reported_uri
+    .as_str()
+    .and_then(|uri| uri.parse::<Uri>().ok())
+    .and_then(|uri| uri.to_file_path().map(|uri_path| uri_path.into_owned()))
+    .and_then(|uri_path| std::fs::canonicalize(uri_path).ok())
+    .zip(std::fs::canonicalize(path).ok())
+    .is_some_and(|(reported, expected)| reported == expected)
 }
 
 fn workspace_root() -> PathBuf {
@@ -304,9 +377,8 @@ fn pull_diagnostics_include_checker_errors() {
       == Some("workspace/diagnostic/refresh")
     {
       server.refreshes += 1;
-      let id = message.get("id").cloned().unwrap_or(Value::Null);
-      server.send(json!({"jsonrpc": "2.0", "id": id, "result": null}));
     }
+    server.answer_request(&message);
   }
 
   drop(ledger);
@@ -322,7 +394,6 @@ fn push_diagnostics_include_checker_errors() {
   }
 
   let ledger = Ledger::new();
-  let accounts_uri = ledger_uri(&ledger.accounts);
 
   let mut server = Server::start(&workspace);
   let initialized = server.initialize(false, &ledger.root);
@@ -338,7 +409,7 @@ fn push_diagnostics_include_checker_errors() {
     match message.get("method").and_then(Value::as_str) {
       Some("textDocument/publishDiagnostics") => {
         let params = &message["params"];
-        if params["uri"] == accounts_uri.as_str()
+        if same_file(&params["uri"], &ledger.accounts)
           && !balance_failures(params["diagnostics"].as_array().expect("diagnostics"))
             .is_empty()
         {
@@ -348,12 +419,7 @@ fn push_diagnostics_include_checker_errors() {
       Some("workspace/diagnostic/refresh") => {
         panic!("push clients must not receive diagnostic refresh requests");
       }
-      _ => {
-        let id = message.get("id").cloned().unwrap_or(Value::Null);
-        if message.get("method").is_some() && !id.is_null() {
-          server.send(json!({"jsonrpc": "2.0", "id": id, "result": null}));
-        }
-      }
+      _ => server.answer_request(&message),
     }
   }
 

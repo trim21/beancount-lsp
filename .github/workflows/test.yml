@@ -51,6 +51,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Test (cargo test)
+        timeout-minutes: 10
         run: cargo nextest run -p beancount-lsp
 
   cargo-test:
