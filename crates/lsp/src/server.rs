@@ -1157,14 +1157,13 @@ include "common.bean"
   async fn waits_for_requested_checker_generation() {
     let (results_tx, results_rx) = watch::channel(Arc::new(CheckerResults::default()));
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let dir = tempfile::tempdir().unwrap();
+    let ledger_uri = ledger_uri(&dir.path().join("main.bean"));
 
     let worker = tokio::spawn(async move {
       started_rx.await.unwrap();
       let mut by_uri = HashMap::new();
-      by_uri.insert(
-        Url::from_file_path("/tmp/main.bean").unwrap(),
-        vec![Diagnostic::default()],
-      );
+      by_uri.insert(ledger_uri, vec![Diagnostic::default()]);
       results_tx
         .send(Arc::new(CheckerResults {
           generation: 2,
