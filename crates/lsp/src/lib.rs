@@ -127,17 +127,35 @@ fn init_logging(cli: &Cli) -> Result<()> {
   Ok(())
 }
 
+/// Debug builds of the server's futures need more stack than Windows' 1 MiB default for the
+/// main thread, so the server always runs on an explicitly sized thread.
+const SERVER_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+fn internal_error(message: String) -> tower_lsp_server::jsonrpc::Error {
+  tower_lsp_server::jsonrpc::Error {
+    code: tower_lsp_server::jsonrpc::ErrorCode::InternalError,
+    message: message.into(),
+    data: None,
+  }
+}
+
 /// Run the async server on a fresh multi-threaded Tokio runtime.
 /// This is useful for non-Rust embeddings (e.g., the Python wrapper) that need a blocking entrypoint.
 pub fn run_server_blocking(argv: Vec<String>) -> Result<()> {
+  std::thread::Builder::new()
+    .name("beancount-lsp".to_owned())
+    .stack_size(SERVER_STACK_SIZE)
+    .spawn(move || run_server_on_runtime(argv))
+    .map_err(|err| internal_error(format!("failed to spawn server thread: {err}")))?
+    .join()
+    .unwrap_or_else(|_| Err(internal_error("server thread panicked".to_owned())))
+}
+
+fn run_server_on_runtime(argv: Vec<String>) -> Result<()> {
   let rt = tokio::runtime::Builder::new_multi_thread()
     .enable_all()
     .build()
-    .map_err(|err| tower_lsp_server::jsonrpc::Error {
-      code: tower_lsp_server::jsonrpc::ErrorCode::InternalError,
-      message: format!("failed to start tokio runtime: {err}").into(),
-      data: None,
-    })?;
+    .map_err(|err| internal_error(format!("failed to start tokio runtime: {err}")))?;
 
   rt.block_on(main(argv))
 }
@@ -164,7 +182,12 @@ pub async fn main(argv: Vec<String>) -> Result<()> {
   let stdout = tokio::io::stdout();
 
   let (service, socket) = LspService::build(Backend::new).finish();
-  Server::new(stdin, stdout, socket).serve(service).await;
+  // Pull diagnostics block on the ledger checker, so give requests enough slots to keep
+  // text sync (which shares the same concurrency budget) responsive.
+  Server::new(stdin, stdout, socket)
+    .concurrency_level(16)
+    .serve(service)
+    .await;
 
   Ok(())
 }
